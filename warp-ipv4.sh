@@ -164,13 +164,16 @@ IPv6=0
 if ping -c1 1.1.1.1 >/dev/null 2>&1; then IPv4=1; yellow "✔ IPv4 可用"; fi
 if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then IPv6=1; yellow "✔ IPv6 可用"; fi
 
-if [ "$IPv6" = "1" ]; then
-    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-elif [ "$IPv4" = "1" ]; then
+# ========================== 根据环境选择 WARP 端点 ==========================
+if [ "$IPv6" = "1" ] && [ "$IPv4" = "0" ]; then
+    # IPv6-only VPS → 获取 WARP IPv4
     ENDPOINT="162.159.192.1:2408"
+elif [ "$IPv4" = "1" ] && [ "$IPv6" = "0" ]; then
+    # IPv4-only VPS → 获取 WARP IPv6
+    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
 else
-    red "❌ 未检测到可用网络"
-    exit 1
+    # 双栈 VPS → 默认使用 IPv4 WARP
+    ENDPOINT="162.159.192.1:2408"
 fi
 yellow "使用端点：$ENDPOINT"
 
@@ -179,7 +182,6 @@ SSH_IPV4=$(curl -4s https://ip.gs || true)
 SSH_IPV6=$(curl -6s https://ip.gs || true)
 
 # ========================== 生成 warp.conf ==========================
-# ⚠️ 安全模式: 所有出站走 WARP，但保留 SSH 入站
 EXCLUDE=""
 [ -n "$SSH_IPV4" ] && EXCLUDE="$EXCLUDE\nExcludeRoutes = $SSH_IPV4/32"
 [ -n "$SSH_IPV6" ] && EXCLUDE="$EXCLUDE\nExcludeRoutes = $SSH_IPV6/128"
@@ -238,16 +240,16 @@ fi
 # ========================== 等待 WARP IP ==========================
 yellow "⏳ 等待 WARP IP..."
 for i in {1..20}; do
-    ipv4=$(curl -4s https://ip.gs || true)
-    ipv6=$(curl -6s https://ip.gs || true)
-    # 判断是否获取到 WARP IP
-    if [ -n "$ipv4" ] && [ "$ipv4" != "$SSH_IPV4" ]; then
-        green "✅ WARP IPv4：$ipv4"
+    warp_ipv4=$(curl -4s https://ip.gs || true)
+    warp_ipv6=$(curl -6s https://ip.gs || true)
+    # 只显示真实 WARP IP（排除 VPS 公网 IP）
+    if [ -n "$warp_ipv4" ] && [ "$warp_ipv4" != "$SSH_IPV4" ]; then
+        green "✅ WARP IPv4：$warp_ipv4"
     fi
-    if [ -n "$ipv6" ] && [ "$ipv6" != "$SSH_IPV6" ]; then
-        green "✅ WARP IPv6：$ipv6"
+    if [ -n "$warp_ipv6" ] && [ "$warp_ipv6" != "$SSH_IPV6" ]; then
+        green "✅ WARP IPv6：$warp_ipv6"
     fi
-    [ -n "$ipv4" ] && [ "$ipv4" != "$SSH_IPV4" ] && [ -n "$ipv6" ] && [ "$ipv6" != "$SSH_IPV6" ] && break
+    [ -n "$warp_ipv4" ] && [ "$warp_ipv4" != "$SSH_IPV4" ] && [ -n "$warp_ipv6" ] && [ "$warp_ipv6" != "$SSH_IPV6" ] && break
     sleep 1
 done
 
