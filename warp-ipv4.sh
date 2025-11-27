@@ -10,22 +10,19 @@ WG_BIN="/usr/local/bin/warp-go"
 CONF="/etc/warp/warp.conf"
 SERVICE_NAME="warp-go"
 
-# =====================================================
-# =============== 通用功能：start/stop/status =========
-# =====================================================
-
+# ========================== WARP 控制功能 ==========================
 warp_status() {
     echo "========================"
     echo "🌍 WARP IP 信息"
     echo "========================"
     echo ""
-    echo "🔸 IPv4:"
+    echo "🔸 IPv4:" 
     curl -4s https://ip.gs || echo "未获取 IPv4"
     echo ""
-    echo "🔸 IPv6:"
+    echo "🔸 IPv6:" 
     curl -6s https://ip.gs || echo "未获取 IPv6"
     echo ""
-    echo "🔸 Cloudflare trace:"
+    echo "🔸 Cloudflare trace:" 
     curl -s https://www.cloudflare.com/cdn-cgi/trace || echo "trace 获取失败"
     echo ""
 }
@@ -53,63 +50,68 @@ warp_start() {
 
 warp_restart() {
     echo "🔄 重启 WARP 服务..."
-    if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
-        systemctl restart $SERVICE_NAME
-    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
-        rc-service $SERVICE_NAME restart
-    fi
-    echo "✔ 已重启"
+    warp_stop
+    warp_start
 }
 
-# =====================================================
-# ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
-# =====================================================
+# ========================== 菜单管理 ==========================
+show_menu() {
+    echo ""
+    echo "=============================="
+    echo "    WARP 管理菜单"
+    echo "=============================="
+    echo "1) 查看 WARP IP"
+    echo "2) 启动 WARP"
+    echo "3) 停止 WARP"
+    echo "4) 重启 WARP"
+    echo "5) 卸载 WARP"
+    echo "0) 退出"
+    echo "=============================="
+    read -rp "请选择操作 [0-5]: " choice
+    case "$choice" in
+        1) warp_status ;;
+        2) warp_start ;;
+        3) warp_stop ;;
+        4) warp_restart ;;
+        5) bash "$0" uninstall ;;
+        0) exit 0 ;;
+        *) red "无效选项"; show_menu ;;
+    esac
+}
 
-case "$1" in
-    status) warp_status; exit 0 ;;
-    stop) warp_stop; exit 0 ;;
-    start) warp_start; exit 0 ;;
-    restart) warp_restart; exit 0 ;;
-    uninstall) ;; # 卸载逻辑下方执行
-    ""|install) yellow "开始安装 WARP..." ;;
-    *) red "未知命令：$1"; echo "可用命令：install / uninstall / status / start / stop / restart"; exit 1 ;;
-esac
-
-# =====================================================
-# =============== 卸载功能 ===========================
-# =====================================================
+# ========================== 卸载 ==========================
 if [ "$1" = "uninstall" ]; then
     yellow "🛑 正在卸载 warp-go..."
+    warp_stop
     if systemctl list-unit-files | grep -q warp-go; then
-        systemctl stop warp-go 2>/dev/null || true
         systemctl disable warp-go 2>/dev/null || true
         rm -f /etc/systemd/system/warp-go.service
         systemctl daemon-reload
     fi
     if [ -f /etc/init.d/warp-go ]; then
-        rc-service warp-go stop || true
         rc-update del warp-go default || true
         rm -f /etc/init.d/warp-go
     fi
-    pkill -f warp-go 2>/dev/null || true
     rm -rf /etc/warp
     rm -f "$WG_BIN"
     green "✅ warp-go 已完全卸载"
     exit 0
 fi
 
-# =====================================================
-# ============ 安全卸载旧版本 ========================
-# =====================================================
+# ========================== 如果有参数直接执行命令 ==========================
+case "$1" in
+    status) warp_status; exit 0 ;;
+    start) warp_start; exit 0 ;;
+    stop) warp_stop; exit 0 ;;
+    restart) warp_restart; exit 0 ;;
+esac
+
+# ========================== 安全卸载旧版本 ==========================
 yellow "🧹 清理旧 warp-go 进程..."
-if systemctl list-unit-files | grep -q warp-go; then systemctl stop warp-go 2>/dev/null || true; fi
-if [ -f /etc/init.d/warp-go ]; then rc-service warp-go stop 2>/dev/null || true; fi
-pkill -f warp-go 2>/dev/null || true
+warp_stop
 rm -f "$WG_BIN" 2>/dev/null || true
 
-# =====================================================
-# =============== 系统检测 ===========================
-# =====================================================
+# ========================== 系统检测 ==========================
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     SYS=$ID
@@ -119,7 +121,7 @@ else
 fi
 yellow "检测到系统：$SYS"
 
-# ======== 安装依赖 ===========
+# 安装依赖
 case "$SYS" in
     alpine)
         apk update
@@ -137,18 +139,14 @@ case "$SYS" in
     ;;
 esac
 
-# =====================================================
-# =============== 下载 warp-go ========================
-# =====================================================
+# ========================== 下载 warp-go ==========================
 ARCH="amd64"
 yellow "⬇️ 下载 warp-go ..."
 wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}
 chmod +x "$WG_BIN"
 
-# =====================================================
-# =============== warpapi 申请账户 ====================
-# =====================================================
-yellow "🔑 正在申请 WARP 普通账户..."
+# ========================== warpapi 申请账户 ==========================
+yellow "🔑 申请 WARP 普通账户..."
 API_BIN="./warpapi"
 wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
 chmod +x "$API_BIN"
@@ -159,28 +157,13 @@ warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
 rm -f $API_BIN
 mkdir -p /etc/warp
 
-# =====================================================
-# ========== 检测网络环境 / 选择端点 =================
-# =====================================================
+# ========================== 检测网络 ==========================
 yellow "🌐 检测网络环境..."
-if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
-    IPv6=1
-    yellow "✔ IPv6 可用"
-else
-    IPv6=0
-    yellow "⚠ 未检测到 IPv6"
-fi
+IPv4=0
+IPv6=0
+if ping -c1 1.1.1.1 >/dev/null 2>&1; then IPv4=1; yellow "✔ IPv4 可用"; fi
+if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then IPv6=1; yellow "✔ IPv6 可用"; fi
 
-# IPv4 检测
-if ping -c1 1.1.1.1 >/dev/null 2>&1; then
-    IPv4=1
-    yellow "✔ IPv4 可用"
-else
-    IPv4=0
-    yellow "⚠ 未检测到 IPv4"
-fi
-
-# 选择端点
 if [ "$IPv6" = "1" ]; then
     ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
 elif [ "$IPv4" = "1" ]; then
@@ -191,9 +174,8 @@ else
 fi
 yellow "使用端点：$ENDPOINT"
 
-# =====================================================
-# =============== 生成 warp.conf ======================
-# =====================================================
+# ========================== 生成 warp.conf ==========================
+# ⚠️ 安全模式: 不覆盖 VPS 入站 IPv4（保留 SSH）
 cat > $CONF <<EOF
 [Account]
 Device = $device_id
@@ -206,13 +188,12 @@ MTU = 1280
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 Endpoint = $ENDPOINT
-AllowedIPs = 0.0.0.0/0, ::/0
+# 只让外发流量走 WARP，不覆盖 VPS IPv4 入站
+AllowedIPs = 1.1.1.1/32, 8.8.8.8/32
 KeepAlive = 30
 EOF
 
-# =====================================================
-# =============== 创建并启动服务 =====================
-# =====================================================
+# ========================== 创建服务 ==========================
 if [ "$SYSTEMD" = "1" ]; then
     yellow "🛠 创建 systemd 服务..."
     cat > /etc/systemd/system/warp-go.service <<EOF
@@ -238,6 +219,7 @@ else
 #!/sbin/openrc-run
 command="${WG_BIN}"
 command_args="--config=${CONF}"
+command_background="yes"
 pidfile="/var/run/warp-go.pid"
 EOF
     chmod +x $SERVICE_FILE
@@ -245,9 +227,7 @@ EOF
     rc-service warp-go restart
 fi
 
-# =====================================================
-# =============== 等待 IPv4/IPv6 获取 =================
-# =====================================================
+# ========================== 等待 WARP IP ==========================
 yellow "⏳ 等待 WARP IP..."
 for i in {1..15}; do
     ipv4=$(curl -4s https://ip.gs || true)
@@ -256,42 +236,11 @@ for i in {1..15}; do
     sleep 1
 done
 
-# 输出结果
 if [ -n "$ipv4" ]; then green "✅ WARP IPv4：$ipv4"; fi
 if [ -n "$ipv6" ]; then green "✅ WARP IPv6：$ipv6"; fi
-if [ -z "$ipv4" ] && [ -z "$ipv6" ]; then
-    red "❌ 未获取到 WARP IP，请查看日志"
-fi
-# =====================================================
-# =============== 简易管理菜单 =======================
-# =====================================================
-show_menu() {
-    echo ""
-    echo "=============================="
-    echo "    WARP 管理菜单"
-    echo "=============================="
-    echo "1) 查看 WARP IP"
-    echo "2) 启动 WARP"
-    echo "3) 停止 WARP"
-    echo "4) 重启 WARP"
-    echo "5) 卸载 WARP"
-    echo "0) 退出"
-    echo "=============================="
-    read -rp "请选择操作 [0-5]: " choice
-    case "$choice" in
-        1) warp_status ;;
-        2) warp_start ;;
-        3) warp_stop ;;
-        4) warp_restart ;;
-        5) bash "$0" uninstall ;;
-        0) exit 0 ;;
-        *) red "无效选项"; show_menu ;;
-    esac
-}
+if [ -z "$ipv4" ] && [ -z "$ipv6" ]; then red "❌ 未获取到 WARP IP，请查看日志"; fi
 
-# 如果未带参数就显示菜单
+# ========================== 如果没有参数，显示菜单 ==========================
 if [ -z "$1" ]; then
-    while true; do
-        show_menu
-    done
+    while true; do show_menu; done
 fi
