@@ -6,7 +6,66 @@ red(){ echo -e "\033[31m\033[01m$1\033[0m"; }
 green(){ echo -e "\033[32m\033[01m$1\033[0m"; }
 yellow(){ echo -e "\033[33m\033[01m$1\033[0m"; }
 
-# ======== 检测系统 ===========
+WG_BIN="/usr/local/bin/warp-go"
+CONF="/etc/warp/warp.conf"
+
+# =====================================================
+# ===============  卸载功能（可选）  ==================
+# =====================================================
+if [ "$1" = "uninstall" ]; then
+    yellow "🛑 正在卸载 warp-go..."
+
+    if systemctl list-unit-files | grep -q warp-go; then
+        systemctl stop warp-go 2>/dev/null || true
+        systemctl disable warp-go 2>/dev/null || true
+        rm -f /etc/systemd/system/warp-go.service
+        systemctl daemon-reload
+    fi
+
+    if [ -f /etc/init.d/warp-go ]; then
+        rc-service warp-go stop || true
+        rc-update del warp-go default || true
+        rm -f /etc/init.d/warp-go
+    fi
+
+    pkill -f warp-go 2>/dev/null || true
+
+    rm -rf /etc/warp
+    rm -f "$WG_BIN"
+
+    green "✅ warp-go 已完全卸载"
+    exit 0
+fi
+
+
+# =====================================================
+# ============ 脚本开头加入安全卸载逻辑 ==============
+# =====================================================
+
+yellow "🧹 清理旧 warp-go 进程（防 Text file busy）..."
+
+# 停止旧 systemd 服务
+if systemctl list-unit-files | grep -q warp-go; then
+    systemctl stop warp-go 2>/dev/null || true
+fi
+
+# 停止旧 openrc 服务
+if [ -f /etc/init.d/warp-go ]; then
+    rc-service warp-go stop 2>/dev/null || true
+fi
+
+# 杀死所有 warp-go 进程
+pkill -f warp-go 2>/dev/null || true
+sleep 1
+
+# 删除旧二进制
+rm -f "$WG_BIN" 2>/dev/null || true
+
+
+# =====================================================
+# ===============  系统检测 ===========================
+# =====================================================
+
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     SYS=$ID
@@ -35,15 +94,20 @@ case "$SYS" in
     ;;
 esac
 
-# ======== warp-go 下载 ===========
+# =====================================================
+# =============== 下载 warp-go ========================
+# =====================================================
+
 ARCH="amd64"
-WG_BIN="/usr/local/bin/warp-go"
 
 yellow "⬇️ 下载 warp-go ..."
 wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}
 chmod +x "$WG_BIN"
 
-# ======== warpapi 申请账户 ===========
+# =====================================================
+# =============== warpapi 申请账户 ====================
+# =====================================================
+
 yellow "🔑 正在申请 WARP 普通账户..."
 
 API_BIN="./warpapi"
@@ -57,9 +121,11 @@ warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
 rm -f $API_BIN
 
 mkdir -p /etc/warp
-CONF="/etc/warp/warp.conf"
 
-# ======== 检测 IPv6-only，选择最佳 WARP 端点 ===========
+# =====================================================
+# ========== 检测 IPv6-only，自动选择端点 ============
+# =====================================================
+
 yellow "🌐 检测网络环境..."
 
 if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
@@ -71,16 +137,19 @@ else
 fi
 
 if [ "$IPv6" = "1" ]; then
-    # Cloudflare WARP IPv6 endpoint
     ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
 else
-    # Cloudflare WARP IPv4 endpoint
     ENDPOINT="162.159.192.1:2408"
 fi
 
 yellow "使用端点：$ENDPOINT"
 
-# ======== 写入 warp.conf ===========
+# =====================================================
+# =============== 生成 warp.conf ======================
+# =====================================================
+
+CONF="/etc/warp/warp.conf"
+
 cat > $CONF <<EOF
 [Account]
 Device = $device_id
@@ -97,9 +166,14 @@ AllowedIPs = 0.0.0.0/0
 KeepAlive = 30
 EOF
 
-# ======== 创建服务 ===========
+
+# =====================================================
+# ===============  创建并启动服务  ====================
+# =====================================================
+
 if [ "$SYSTEMD" = "1" ]; then
     yellow "🛠 创建 systemd 服务..."
+
     cat > /etc/systemd/system/warp-go.service <<EOF
 [Unit]
 Description=warp-go service
@@ -120,6 +194,7 @@ EOF
 
 else
     yellow "🛠 创建 OpenRC 服务..."
+
     SERVICE_FILE="/etc/init.d/warp-go"
     cat > $SERVICE_FILE <<EOF
 #!/sbin/openrc-run
@@ -128,6 +203,7 @@ command_args="--config=${CONF}"
 command_background="yes"
 pidfile="/var/run/warp-go.pid"
 EOF
+
     chmod +x $SERVICE_FILE
     rc-update add warp-go default
     rc-service warp-go restart
@@ -135,7 +211,10 @@ fi
 
 sleep 2
 
-# ======== 输出结果 ===========
+# =====================================================
+# =============== 输出结果 ============================
+# =====================================================
+
 ipv4=$(curl -4s https://ip.gs || true)
 
 if [ -n "$ipv4" ]; then
