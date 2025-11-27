@@ -174,8 +174,16 @@ else
 fi
 yellow "使用端点：$ENDPOINT"
 
+# ========================== 获取 VPS 公网 IP ==========================
+SSH_IPV4=$(curl -4s https://ip.gs || true)
+SSH_IPV6=$(curl -6s https://ip.gs || true)
+
 # ========================== 生成 warp.conf ==========================
-# ⚠️ 安全模式: 不覆盖 VPS 入站 IPv4（保留 SSH）
+# ⚠️ 安全模式: 所有出站走 WARP，但保留 SSH 入站
+EXCLUDE=""
+[ -n "$SSH_IPV4" ] && EXCLUDE="$EXCLUDE\nExcludeRoutes = $SSH_IPV4/32"
+[ -n "$SSH_IPV6" ] && EXCLUDE="$EXCLUDE\nExcludeRoutes = $SSH_IPV6/128"
+
 cat > $CONF <<EOF
 [Account]
 Device = $device_id
@@ -188,9 +196,9 @@ MTU = 1280
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 Endpoint = $ENDPOINT
-# 只让外发流量走 WARP，不覆盖 VPS IPv4 入站
-AllowedIPs = 1.1.1.1/32, 8.8.8.8/32
+AllowedIPs = 0.0.0.0/0, ::/0
 KeepAlive = 30
+$EXCLUDE
 EOF
 
 # ========================== 创建服务 ==========================
@@ -229,16 +237,19 @@ fi
 
 # ========================== 等待 WARP IP ==========================
 yellow "⏳ 等待 WARP IP..."
-for i in {1..15}; do
+for i in {1..20}; do
     ipv4=$(curl -4s https://ip.gs || true)
     ipv6=$(curl -6s https://ip.gs || true)
-    if [ -n "$ipv4" ] || [ -n "$ipv6" ]; then break; fi
+    # 判断是否获取到 WARP IP
+    if [ -n "$ipv4" ] && [ "$ipv4" != "$SSH_IPV4" ]; then
+        green "✅ WARP IPv4：$ipv4"
+    fi
+    if [ -n "$ipv6" ] && [ "$ipv6" != "$SSH_IPV6" ]; then
+        green "✅ WARP IPv6：$ipv6"
+    fi
+    [ -n "$ipv4" ] && [ "$ipv4" != "$SSH_IPV4" ] && [ -n "$ipv6" ] && [ "$ipv6" != "$SSH_IPV6" ] && break
     sleep 1
 done
-
-if [ -n "$ipv4" ]; then green "✅ WARP IPv4：$ipv4"; fi
-if [ -n "$ipv6" ]; then green "✅ WARP IPv6：$ipv6"; fi
-if [ -z "$ipv4" ] && [ -z "$ipv6" ]; then red "❌ 未获取到 WARP IP，请查看日志"; fi
 
 # ========================== 如果没有参数，显示菜单 ==========================
 if [ -z "$1" ]; then
