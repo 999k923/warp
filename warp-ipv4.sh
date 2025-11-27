@@ -8,7 +8,90 @@ yellow(){ echo -e "\033[33m\033[01m$1\033[0m"; }
 
 WG_BIN="/usr/local/bin/warp-go"
 CONF="/etc/warp/warp.conf"
+# =====================================================
+# =============== 通用功能：start/stop/status =========
+# =====================================================
 
+SERVICE_NAME="warp-go"
+
+warp_status() {
+    echo "========================"
+    echo "🌍 WARP IP 信息"
+    echo "========================"
+    echo ""
+    echo "🔸 IPv4:"
+    curl -4s https://ip.gs || echo "未获取 IPv4"
+    echo ""
+    echo "🔸 IPv6:"
+    curl -6s https://ip.gs || echo "未获取 IPv6"
+    echo ""
+    echo "🔸 Cloudflare trace:"
+    curl -s https://www.cloudflare.com/cdn-cgi/trace || echo "trace 获取失败"
+    echo ""
+}
+
+warp_stop() {
+    echo "🛑 停止 WARP 服务..."
+    if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
+        systemctl stop $SERVICE_NAME
+    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
+        rc-service $SERVICE_NAME stop
+    fi
+    pkill -f warp-go 2>/dev/null || true
+    echo "✔ 已停止"
+}
+
+warp_start() {
+    echo "🚀 启动 WARP 服务..."
+    if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
+        systemctl start $SERVICE_NAME
+    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
+        rc-service $SERVICE_NAME start
+    fi
+    echo "✔ 已启动"
+}
+
+warp_restart() {
+    echo "🔄 重启 WARP 服务..."
+    if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
+        systemctl restart $SERVICE_NAME
+    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
+        rc-service $SERVICE_NAME restart
+    fi
+    echo "✔ 已重启"
+}
+
+# ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
+
+case "$1" in
+    status)
+        warp_status
+        exit 0
+    ;;
+    stop)
+        warp_stop
+        exit 0
+    ;;
+    start)
+        warp_start
+        exit 0
+    ;;
+    restart)
+        warp_restart
+        exit 0
+    ;;
+    uninstall)
+        # 卸载逻辑保留，原来部分继续向下执行
+    ;;
+    ""|install)
+        yellow "开始安装 WARP..."
+    ;;
+    *)
+        red "未知命令：$1"
+        echo "可用命令：install / uninstall / status / start / stop / restart"
+        exit 1
+    ;;
+esac
 # =====================================================
 # ===============  卸载功能（可选）  ==================
 # =====================================================
