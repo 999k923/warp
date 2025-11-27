@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ======== 颜色 ===========
+# ======== 彩色输出 ===========
 red(){ echo -e "\033[31m\033[01m$1\033[0m"; }
 green(){ echo -e "\033[32m\033[01m$1\033[0m"; }
 yellow(){ echo -e "\033[33m\033[01m$1\033[0m"; }
@@ -18,7 +18,6 @@ fi
 yellow "检测到系统：$SYS"
 
 # ======== 安装依赖 ===========
-
 case "$SYS" in
     alpine)
         apk update
@@ -36,16 +35,16 @@ case "$SYS" in
     ;;
 esac
 
-# ======== 下载 warp-go ===========
+# ======== warp-go 下载 ===========
 ARCH="amd64"
 WG_BIN="/usr/local/bin/warp-go"
 
-yellow "下载 warp-go ..."
+yellow "⬇️ 下载 warp-go ..."
 wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}
 chmod +x "$WG_BIN"
 
-# ======== 使用你原脚本的 warpapi 生成配置 ===========
-yellow "申请 WARP 普通账户..."
+# ======== warpapi 申请账户 ===========
+yellow "🔑 正在申请 WARP 普通账户..."
 
 API_BIN="./warpapi"
 wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
@@ -60,7 +59,28 @@ rm -f $API_BIN
 mkdir -p /etc/warp
 CONF="/etc/warp/warp.conf"
 
-# ======== 生成配置（与你原脚本保持一致）===========
+# ======== 检测 IPv6-only，选择最佳 WARP 端点 ===========
+yellow "🌐 检测网络环境..."
+
+if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
+    IPv6=1
+    yellow "✔ 检测到 IPv6 可用"
+else
+    IPv6=0
+    yellow "⚠ 未检测到 IPv6"
+fi
+
+if [ "$IPv6" = "1" ]; then
+    # Cloudflare WARP IPv6 endpoint
+    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+else
+    # Cloudflare WARP IPv4 endpoint
+    ENDPOINT="162.159.192.1:2408"
+fi
+
+yellow "使用端点：$ENDPOINT"
+
+# ======== 写入 warp.conf ===========
 cat > $CONF <<EOF
 [Account]
 Device = $device_id
@@ -72,17 +92,14 @@ MTU = 1280
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-Endpoint = 162.159.192.1:2408
+Endpoint = $ENDPOINT
 AllowedIPs = 0.0.0.0/0
 KeepAlive = 30
 EOF
 
-# ======== 创建服务（systemd + openrc 双支持）===========
-
+# ======== 创建服务 ===========
 if [ "$SYSTEMD" = "1" ]; then
-    # systemd
-    yellow "创建 systemd warp-go 服务..."
-
+    yellow "🛠 创建 systemd 服务..."
     cat > /etc/systemd/system/warp-go.service <<EOF
 [Unit]
 Description=warp-go service
@@ -91,6 +108,7 @@ After=network.target
 [Service]
 ExecStart=${WG_BIN} --config=${CONF}
 Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
@@ -101,9 +119,7 @@ EOF
     systemctl restart warp-go
 
 else
-    # openrc
-    yellow "创建 OpenRC warp-go 服务..."
-
+    yellow "🛠 创建 OpenRC 服务..."
     SERVICE_FILE="/etc/init.d/warp-go"
     cat > $SERVICE_FILE <<EOF
 #!/sbin/openrc-run
@@ -112,7 +128,6 @@ command_args="--config=${CONF}"
 command_background="yes"
 pidfile="/var/run/warp-go.pid"
 EOF
-
     chmod +x $SERVICE_FILE
     rc-update add warp-go default
     rc-service warp-go restart
@@ -120,7 +135,7 @@ fi
 
 sleep 2
 
-# ======== 输出 IPv4 ===========
+# ======== 输出结果 ===========
 ipv4=$(curl -4s https://ip.gs || true)
 
 if [ -n "$ipv4" ]; then
@@ -128,5 +143,6 @@ if [ -n "$ipv4" ]; then
     green " 🎉 WARP IPv4 获取成功：$ipv4"
     green "================================="
 else
-    red "❌ WARP IPv4 获取失败"
+    red "❌ 未能获取 WARP IPv4，请查看日志："
+    red "journalctl -u warp-go -n 50"
 fi
