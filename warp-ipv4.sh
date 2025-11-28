@@ -1,10 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# warp-cf-compat.sh
-# A: 使用策略路由保证入站不被劫持（与CFwarp逻辑一致）
-# 兼容: Alpine + Debian/Ubuntu
-# 功能: install / start / stop / restart / status / uninstall + 菜单
+# warp-cf-compat-final.sh
+# 说明：
+# - 优先使用 IPv4 endpoint（保证 IPv4-only 能拿到 WARP IPv4）
+# - 若无法使用 IPv4 endpoint（主机无 IPv4 出口），会尝试 IPv6 endpoint
+# - 出站走 WARP（AllowedIPs = 0.0.0.0/0, ::/0）
+# - 使用策略路由（ip rule + custom table）保证来自 VPS 公网 IP 的流量走原生主路由（SSH 不会断）
+# - 兼容 Alpine (OpenRC) 与 Debian/Ubuntu (systemd)
+# - 提供 start/stop/restart/status/uninstall 与交互菜单
 
 # ======= 配置 =======
 WG_BIN="/usr/local/bin/warp-go"
@@ -12,10 +16,11 @@ CONF_DIR="/etc/warp"
 CONF="$CONF_DIR/warp.conf"
 SERVICE_NAME="warp-go"
 ARCH="amd64"
+# 优先 IPv4 endpoint（保证 IPv4-only 拿到 WARP IPv4）
 WG_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}"
 API_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64"
 TMP_API="./warpapi_tmp"
-# 路由表号与名字（可自定义）
+# 路由表号与名字
 RT_TABLE_NUM=200
 RT_TABLE_NAME="warp_main"
 
@@ -39,8 +44,14 @@ warp_status() {
     echo "本机公网 IPv4: $(curl -4s https://ip.gs || echo 'N/A')"
     echo "本机公网 IPv6: $(curl -6s https://ip.gs || echo 'N/A')"
     echo ""
-    echo "WARP (出口) IPv4: $(curl -4s https://ip.gs --interface warp0 2>/dev/null || true)"
-    echo "WARP (出口) IPv6: $(curl -6s https://ip.gs --interface warp0 2>/dev/null || true)"
+    # 注意：若没有 warp 接口，--interface warp0 会报错；这里使用容错
+    if ip link show warp0 >/dev/null 2>&1; then
+        echo "WARP (出口) IPv4: $(curl -4s https://ip.gs --interface warp0 2>/dev/null || echo 'N/A')"
+        echo "WARP (出口) IPv6: $(curl -6s https://ip.gs --interface warp0 2>/dev/null || echo 'N/A')"
+    else
+        echo "WARP (出口) IPv4: N/A (warp0 未就绪)"
+        echo "WARP (出口) IPv6: N/A (warp0 未就绪)"
+    fi
     echo ""
     echo "Cloudflare trace:"
     curl -s https://www.cloudflare.com/cdn-cgi/trace || echo "trace 获取失败"
@@ -108,15 +119,15 @@ case "${1:-}" in
     uninstall)
         yellow "🛑 卸载中..."
         warp_stop
-        # 删除策略路由
-        if ip rule show | grep -q "from ${SSH_IPV4:-} lookup $RT_TABLE_NAME"; then
-            ip rule del from "${SSH_IPV4}" lookup $RT_TABLE_NAME || true
+        # 删除 ip rule (基于 SSH_IPV4 变量，如果存在)
+        if [ -n "${SSH_IPV4:-}" ]; then
+            ip rule del from "${SSH_IPV4}" lookup ${RT_TABLE_NAME} priority 100 2>/dev/null || true
         fi
         # 删除 route table entry
-        ip -4 route flush table $RT_TABLE_NAME 2>/dev/null || true
+        ip -4 route flush table ${RT_TABLE_NAME} 2>/dev/null || true
         # 删除 /etc/iproute2/rt_tables 中的行（谨慎）
-        if grep -q "^${RT_TABLE_NUM} ${RT_TABLE_NAME}\$" /etc/iproute2/rt_tables 2>/dev/null; then
-            sed -i "/^${RT_TABLE_NUM} ${RT_TABLE_NAME}\$/d" /etc/iproute2/rt_tables
+        if [ -f /etc/iproute2/rt_tables ]; then
+            sed -i "/^${RT_TABLE_NUM} ${RT_TABLE_NAME}\$/d" /etc/iproute2/rt_tables || true
         fi
         # 删除服务文件
         if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
@@ -187,7 +198,6 @@ device_id=$(echo "$API_OUTPUT" | awk -F': ' '/device_id/{print $2}' | tr -d '\r'
 warp_token=$(echo "$API_OUTPUT" | awk -F': ' '/token/{print $2}' | tr -d '\r' || true)
 rm -f "$TMP_API"
 
-# 如果没有获取到，脚本仍继续（用户可用已有 token）
 if [ -z "$private_key" ] || [ -z "$device_id" ] || [ -z "$warp_token" ]; then
     yellow "警告：warpapi 未返回完整信息，继续但可能需要手动配置 warp.conf"
 fi
@@ -204,31 +214,36 @@ SSH_IPV6=$(curl -6s https://ip.gs || true)
 info "检测到 VPS 公网 IPv4: ${SSH_IPV4:-N/A}, IPv6: ${SSH_IPV6:-N/A}"
 
 # ======= 捕获默认 IPv4 路由信息 (用于策略路由) =======
-# 仅在有默认路由时捕获
 MAIN_DEV=""
 MAIN_GW=""
 if ip -4 route show default >/dev/null 2>&1; then
-    # 取默认路由返回最先匹配
-    read -r _ MAIN_GW _ MAIN_DEV _ < <(ip -4 route show default | awk '/default/ {print $3,$5; exit}' )
-    # Fallback: try parse differently
+    # 尝试获取网关与设备
+    MAIN_GW=$(ip -4 route show default | awk '/default/ {print $3; exit}' || true)
+    MAIN_DEV=$(ip -4 route show default | awk '/default/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);break}}; exit}' || true)
+    # fallback 使用 ip route get
     if [ -z "$MAIN_GW" ] || [ -z "$MAIN_DEV" ]; then
-        # try ip route get
         ROUTE_OUT=$(ip route get 1.1.1.1 2>/dev/null || true)
-        # sample: "1.1.1.1 via 192.0.2.1 dev eth0 src 192.0.2.2"
         MAIN_GW=$(echo "$ROUTE_OUT" | awk '/via/ {for(i=1;i<=NF;i++){if($i=="via"){print $(i+1);break}}}' || true)
         MAIN_DEV=$(echo "$ROUTE_OUT" | awk '/dev/ {for(i=1;i<=NF;i++){if($i=="dev"){print $(i+1);break}}}' || true)
     fi
 fi
-
 info "主网卡: ${MAIN_DEV:-N/A}, 网关: ${MAIN_GW:-N/A}"
 
-# ======= 选择 WARP 端点（按 CFwarp 逻辑：优先 IPv4 endpoint，让 IPv4-only 也能拿到 WARP IPv4） =======
-# 这里我们默认使用 IPv4 endpoint so IPv4-only 也能获取 WARP IPv4 (与你要求一致)
-ENDPOINT="162.159.192.1:2408"
-# 若你需要强制 IPv6 endpoint 可调整
+# ======= 选择 WARP 端点（优先 IPv4 endpoint，保证 IPv4-only 拿到 WARP IPv4） =======
+# IPv4 endpoint (Cloudflare warp IPv4 endpoint)
+ENDPOINT_IPV4="162.159.192.1:2408"
+# IPv6 endpoint (备用)
+ENDPOINT_IPV6="[2606:4700:d0::a29f:c005]:2408"
+
+# 首选 IPv4 endpoint；如果主机无法访问 IPv4 endpoint（无 IPv4 出口），则改用 IPv6 endpoint
+ENDPOINT="$ENDPOINT_IPV4"
+if [ "$IPv4" -eq 0 ] && [ "$IPv6" -eq 1 ]; then
+    # 无 IPv4 出口，只能用 IPv6 endpoint
+    ENDPOINT="$ENDPOINT_IPV6"
+fi
 info "使用 WARP endpoint: $ENDPOINT"
 
-# ======= 写 warp.conf（Full-tunnel）并使用 ExcludeRoutes 作为冗余（但主力是策略路由） =======
+# ======= 写 warp.conf（Full-tunnel）并使用 ExcludeRoutes 作为冗余（主力是策略路由） =======
 EXCLUDE_LINES=""
 [ -n "$SSH_IPV4" ] && EXCLUDE_LINES="${EXCLUDE_LINES}ExcludeRoutes = ${SSH_IPV4}/32\n"
 [ -n "$SSH_IPV6" ] && EXCLUDE_LINES="${EXCLUDE_LINES}ExcludeRoutes = ${SSH_IPV6}/128\n"
@@ -252,14 +267,11 @@ EOF
 
 green "已写入 warp.conf 到 $CONF"
 
-# ======= 创建策略路由表 (rt_tables) 与 ip rules，保证来自主公网 IP 的流量走主路由表 =======
-# 创建 /etc/iproute2/rt_tables 条目（如果未存在）
-# ====== 确保 /etc/iproute2/rt_tables 存在并包含自定义表 ======
+# ======= 确保 /etc/iproute2/rt_tables 存在并包含自定义表 ======
 if [ ! -d /etc/iproute2 ]; then
     mkdir -p /etc/iproute2
 fi
 
-# 如果文件不存在，写入基础内容（保留行 + 我们的表）
 if [ ! -f /etc/iproute2/rt_tables ]; then
     cat > /etc/iproute2/rt_tables <<'EOF'
 # reserved values
@@ -272,7 +284,6 @@ if [ ! -f /etc/iproute2/rt_tables ]; then
 EOF
     info "已创建 /etc/iproute2/rt_tables 并添加 warp_main"
 else
-    # 文件存在但可能没有我们需要的表，按需追加（避免重复）
     if ! grep -qE "^[[:space:]]*${RT_TABLE_NUM}[[:space:]]+${RT_TABLE_NAME}" /etc/iproute2/rt_tables; then
         echo "${RT_TABLE_NUM} ${RT_TABLE_NAME}" >> /etc/iproute2/rt_tables
         info "已向 /etc/iproute2/rt_tables 添加 ${RT_TABLE_NUM} ${RT_TABLE_NAME}"
@@ -281,27 +292,24 @@ else
     fi
 fi
 
-# 在表里添加默认路由指向之前记录的网关（仅当 MAIN_GW 与 MAIN_DEV 可用）
+# ======= 在自定义表中添加原主路由（仅在能探测到 MAIN_GW 和 MAIN_DEV 时） =======
 if [ -n "$MAIN_GW" ] && [ -n "$MAIN_DEV" ]; then
-    # 删除旧表的 default（防止重复）
-    ip -4 route flush table $RT_TABLE_NAME 2>/dev/null || true
-    ip -4 route add default via "$MAIN_GW" dev "$MAIN_DEV" table $RT_TABLE_NAME || true
-    info "已在路由表 $RT_TABLE_NAME 中添加默认路由 via $MAIN_GW dev $MAIN_DEV"
+    ip -4 route flush table ${RT_TABLE_NAME} 2>/dev/null || true
+    ip -4 route add default via "$MAIN_GW" dev "$MAIN_DEV" table ${RT_TABLE_NAME} || true
+    info "已在路由表 ${RT_TABLE_NAME} 中添加默认路由 via ${MAIN_GW} dev ${MAIN_DEV}"
+else
+    yellow "未能检测到主网关或主网卡，脚本会继续，但策略路由需要手动设置（见脚本说明）"
 fi
 
-# 添加 ip rule: 从 SSH_IPV4 源走该表，优先级设置为 100
+# ======= 添加 ip rule: 从 VPS 公网 IP 源走该表，优先级 100 =======
 if [ -n "$SSH_IPV4" ]; then
-    # check exists
     if ! ip rule show | grep -q "from ${SSH_IPV4} lookup ${RT_TABLE_NAME}"; then
-        ip rule add from "${SSH_IPV4}" lookup $RT_TABLE_NAME priority 100
+        ip rule add from "${SSH_IPV4}" lookup ${RT_TABLE_NAME} priority 100
         info "已添加 ip rule: from ${SSH_IPV4} lookup ${RT_TABLE_NAME}"
     else
         info "ip rule 已存在: from ${SSH_IPV4} lookup ${RT_TABLE_NAME}"
     fi
 fi
-
-# (可选) IPv6 策略：如果有公网 IPv6 与默认路由，添加对应 IPv6 路由表
-# 这里为简单起见不做 IPv6 表，若需要可扩展
 
 # ======= 创建服务 unit（systemd / OpenRC） =======
 if [ "$SYSTEMD" -eq 1 ]; then
@@ -339,7 +347,7 @@ OPENRC
     rc-service ${SERVICE_NAME} restart || true
 fi
 
-# ======= 等待 WARP 生效（30s），并判断是否确实拿到 WARP IP（对比原 public IP） =======
+# ======= 等待 WARP 生效（最多 30 秒），并判断是否获得 WARP IP（通过比对公网 IP） =======
 yellow "⏳ 等待 WARP 生效（最多 30 秒）..."
 FOUND_WARP_IPV4=""
 FOUND_WARP_IPV6=""
@@ -347,21 +355,21 @@ for i in $(seq 1 30); do
     CUR4=$(curl -4s --max-time 5 https://ip.gs || true)
     CUR6=$(curl -6s --max-time 5 https://ip.gs || true)
 
-    # 判定逻辑：如果外网 IPv4 变化且与 SSH_IPV4 不同 -> 视为 WARP IPv4
+    # 判定逻辑：若外网 IPv4 变化且与 SSH_IPV4 不同 -> 视为 WARP IPv4
     if [ -n "$CUR4" ] && [ -n "$SSH_IPV4" ] && [ "$CUR4" != "$SSH_IPV4" ]; then
         FOUND_WARP_IPV4="$CUR4"
         green "✅ 检测到 WARP IPv4: $FOUND_WARP_IPV4"
         break
     fi
 
-    # IPv6 判断（若你期望也拿到 IPv6）
+    # IPv6 判定
     if [ -n "$CUR6" ] && [ -n "$SSH_IPV6" ] && [ "$CUR6" != "$SSH_IPV6" ]; then
         FOUND_WARP_IPV6="$CUR6"
         green "✅ 检测到 WARP IPv6: $FOUND_WARP_IPV6"
         break
     fi
 
-    # 若 VPS 本来没有公网 IPv4（SSH_IPV4 为空），只要 CUR4 非空且与之前不同则也视为成功
+    # 若 VPS 本来没有公网 IPv4（SSH_IPV4 为空），只要 CUR4 非空则视为成功（IPv6-only 情况可能出现）
     if [ -z "$SSH_IPV4" ] && [ -n "$CUR4" ]; then
         FOUND_WARP_IPV4="$CUR4"
         green "✅ 检测到 WARP IPv4: $FOUND_WARP_IPV4"
@@ -382,7 +390,7 @@ else
     green "👍 WARP 隧道建立成功"
 fi
 
-# ======= 最后：进入菜单（若未给参数） =======
+# ======= 若脚本未带参数则进入交互菜单 =======
 if [ -z "${1:-}" ]; then
     while true; do show_menu; done
 fi
