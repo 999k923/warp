@@ -1,131 +1,133 @@
-#!/bin/sh
-# WARP IPv4 获取脚本（兼容 Alpine / Debian / Ubuntu）
-# 出站走 WARP，入站保留原生 IP。不等待 wg，不卡死。
+#!/bin/bash
 
 set -e
 
-GREEN="\033[32m"
-RED="\033[31m"
-RESET="\033[0m"
+CONFIG_FILE="/etc/wireguard/wgcf.conf"
 
-log(){ echo -e "${GREEN}$1${RESET}"; }
-err(){ echo -e "${RED}$1${RESET}"; }
-
-OS=""
-if [ -f /etc/alpine-release ]; then
-    OS="alpine"
-elif [ -f /etc/debian_version ]; then
-    OS="debian"
-else
-    OS="ubuntu"
-fi
-
-log "系统：$OS"
-
-install_deps(){
-    if [ "$OS" = "alpine" ]; then
-        log "安装依赖 (Alpine)"
-        apk update
-        apk add iproute2 wireguard-tools curl wget openrc
-    else
-        log "安装依赖 (Debian/Ubuntu)"
-        apt update
-        apt install -y iproute2 wireguard-tools curl wget
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "请使用 root 运行此脚本！"
+        exit 1
     fi
 }
 
-install_deps
+detect_os() {
+    if command -v apk >/dev/null 2>&1; then
+        OS="alpine"
+    elif command -v apt >/dev/null 2>&1; then
+        OS="debian"
+    elif command -v yum >/dev/null 2>&1; then
+        OS="centos"
+    else
+        echo "不支持的系统"
+        exit 1
+    fi
+}
 
-mkdir -p /etc/warp
-cd /etc/warp
+install_pkg() {
+    if [ "$OS" = "alpine" ]; then
+        apk add --no-cache wireguard-tools curl
+    elif [ "$OS" = "debian" ]; then
+        apt update && apt install -y wireguard-tools curl
+    else
+        yum install -y wireguard-tools curl
+    fi
+}
 
-log "下载 warp-go..."
-wget -O warp-go https://gitlab.com/ProjectWARP/warp-go/-/raw/main/warp-go
-chmod +x warp-go
+generate_wgcf() {
+    echo "生成 Warp 账户与配置..."
+    wgcf=$(which wgcf || true)
 
-log "申请 WARP 账户..."
-/etc/warp/warp-go --register >/etc/warp/account 2>/dev/null
+    if [ -z "$wgcf" ]; then
+        wget -O /usr/local/bin/wgcf https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_linux_amd64
+        chmod +x /usr/local/bin/wgcf
+    fi
 
-PRIVKEY=$(grep PrivateKey /etc/warp/account | awk -F'= ' '{print $2}')
-PUBKEY=$(grep ClientPublicKey /etc/warp/account | awk -F'= ' '{print $2}')
+    wgcf register --accept-tos
+    wgcf generate
+    mv wgcf-profile.conf $CONFIG_FILE
+}
 
-IP4=$(curl -4 -s --max-time 2 ifconfig.co || echo "")
-IP6=$(curl -6 -s --max-time 2 ifconfig.co || echo "")
+fix_ipv4_routing() {
+    echo "强制配置为优先获取 WARP IPv4（兼容 IPv6 Only / IPv4 Only）..."
 
-if [ -n "$IP4" ]; then
-    log "检测到 IPv4-only 或双栈"
-else
-    log "检测到 IPv6-only (将强制走 WARP IPv4)"
-fi
+    # 删除默认 IPv6 设置（避免卡死）
+    sed -i '/^Address =/d' $CONFIG_FILE
+    sed -i '/^DNS =/d' $CONFIG_FILE
 
-ETH=$(ip route show default | awk '/default/ {print $5}' | head -n1)
-GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
-
-log "网卡: $ETH  网关: $GW"
-
-# 写入 warp.conf
-cat >/etc/warp/warp.conf <<EOF
-[Interface]
-PrivateKey = $PRIVKEY
+    # 强制写入 WARP IPv4
+    cat >> $CONFIG_FILE <<EOF
 Address = 172.16.0.2/32
 DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $PUBKEY
-AllowedIPs = 0.0.0.0/0
-Endpoint = 162.159.192.1:2408
-PersistentKeepalive = 25
 EOF
 
-log "已写入 warp.conf"
+    # 允许路由所有出站流量
+    sed -i '/AllowedIPs/d' $CONFIG_FILE
+    echo "AllowedIPs = 0.0.0.0/0" >> $CONFIG_FILE
+}
 
-TABLE_FILE="/etc/iproute2/rt_tables"
-if [ ! -f $TABLE_FILE ]; then
-    echo "200 warp_main" >$TABLE_FILE
-else
-    grep -q "warp_main" $TABLE_FILE || echo "200 warp_main" >>$TABLE_FILE
-fi
+enable_service() {
+    echo "启动 WARP..."
+    wg-quick down wgcf >/dev/null 2>&1 || true
+    wg-quick up wgcf
+    echo "WARP 已启动。"
+}
 
-if [ -n "$IP4" ]; then
-    log "添加 policy routing"
-    ip rule add from "$IP4" lookup warp_main 2>/dev/null || true
-fi
+disable_service() {
+    echo "停止 WARP..."
+    wg-quick down wgcf >/dev/null 2>&1 || true
+}
 
-ip route add default via "$GW" dev "$ETH" table warp_main 2>/dev/null || true
+show_warp_ip() {
+    echo "当前 WARP IPv4 地址："
+    curl -4 --interface wgcf http://ipinfo.io/ip 2>/dev/null || echo "未获取到 WARP IPv4"
+}
 
-if [ "$OS" = "alpine" ]; then
-    log "创建 OpenRC 服务..."
-    cat >/etc/init.d/warp-go <<EOF
-#!/sbin/openrc-run
-command="/etc/warp/warp-go"
-command_background="yes"
-pidfile="/var/run/warp-go.pid"
-EOF
-    chmod +x /etc/init.d/warp-go
-    rc-update add warp-go default
-    rc-service warp-go restart || true
-else
-    log "创建 systemd 服务..."
-    cat >/etc/systemd/system/warp-go.service <<EOF
-[Unit]
-Description=warp-go
-After=network.target
+uninstall_warp() {
+    echo "卸载 WARP..."
+    disable_service
+    rm -f $CONFIG_FILE
+    rm -f ~/.wgcf*
+    rm -f /usr/local/bin/wgcf
+    echo "卸载完成"
+}
 
-[Service]
-ExecStart=/etc/warp/warp-go
-Restart=always
+install_warp() {
+    install_pkg
+    generate_wgcf
+    fix_ipv4_routing
+    enable_service
+    show_warp_ip
+}
 
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    systemctl enable warp-go
-    systemctl restart warp-go
-fi
+menu() {
+    case "$1" in
+        install)
+            install_warp
+            ;;
+        uninstall)
+            uninstall_warp
+            ;;
+        start)
+            enable_service
+            ;;
+        stop)
+            disable_service
+            ;;
+        ip)
+            show_warp_ip
+            ;;
+        *)
+            echo "使用方法："
+            echo " bash warp-ipv4.sh install   # 安装 WARP IPv4"
+            echo " bash warp-ipv4.sh uninstall # 卸载"
+            echo " bash warp-ipv4.sh start     # 启动 WARP"
+            echo " bash warp-ipv4.sh stop      # 停止 WARP"
+            echo " bash warp-ipv4.sh ip        # 查看 WARP IPv4"
+            ;;
+    esac
+}
 
-sleep 2
-
-WARP_IP=$(curl -4 --interface 172.16.0.2 --max-time 2 ifconfig.co || echo "WARP 未上线")
-log "WARP IPv4：$WARP_IP"
-
-log "完成！"
+check_root
+detect_os
+menu "$1"
