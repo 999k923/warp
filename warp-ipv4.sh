@@ -254,8 +254,31 @@ green "已写入 warp.conf 到 $CONF"
 
 # ======= 创建策略路由表 (rt_tables) 与 ip rules，保证来自主公网 IP 的流量走主路由表 =======
 # 创建 /etc/iproute2/rt_tables 条目（如果未存在）
-if ! grep -qE "^${RT_TABLE_NUM}\s+${RT_TABLE_NAME}\$" /etc/iproute2/rt_tables 2>/dev/null; then
-    echo "${RT_TABLE_NUM} ${RT_TABLE_NAME}" >> /etc/iproute2/rt_tables
+# ====== 确保 /etc/iproute2/rt_tables 存在并包含自定义表 ======
+if [ ! -d /etc/iproute2 ]; then
+    mkdir -p /etc/iproute2
+fi
+
+# 如果文件不存在，写入基础内容（保留行 + 我们的表）
+if [ ! -f /etc/iproute2/rt_tables ]; then
+    cat > /etc/iproute2/rt_tables <<'EOF'
+# reserved values
+255	local
+254	main
+253	default
+0	unspec
+# custom tables
+200	warp_main
+EOF
+    info "已创建 /etc/iproute2/rt_tables 并添加 warp_main"
+else
+    # 文件存在但可能没有我们需要的表，按需追加（避免重复）
+    if ! grep -qE "^[[:space:]]*${RT_TABLE_NUM}[[:space:]]+${RT_TABLE_NAME}" /etc/iproute2/rt_tables; then
+        echo "${RT_TABLE_NUM} ${RT_TABLE_NAME}" >> /etc/iproute2/rt_tables
+        info "已向 /etc/iproute2/rt_tables 添加 ${RT_TABLE_NUM} ${RT_TABLE_NAME}"
+    else
+        info "/etc/iproute2/rt_tables 已包含 ${RT_TABLE_NAME}"
+    fi
 fi
 
 # 在表里添加默认路由指向之前记录的网关（仅当 MAIN_GW 与 MAIN_DEV 可用）
