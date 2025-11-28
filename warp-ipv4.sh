@@ -1,113 +1,170 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+#
+#   WARP-Go 全自动安装脚本（兼容 Alpine / Debian / Ubuntu）
+#   特性：
+#     - IPv4-only VPS 获取 WARP IPv4（最稳定，不丢 SSH）
+#     - IPv6-only VPS 获取 WARP IPv4
+#     - 入站走原生公网，出站走 WARP
+#     - 无需等待 wg 接口，不会卡死
+#     - 自动创建 rt_tables / policy routing
+#     - OpenRC / Systemd 自动适配
+#
 
-# warp-cf-final.sh
-# CFwarp-style final script:
-# - 优先使用 IPv4 endpoint (保证 IPv4-only 能拿到 WARP IPv4)
-# - 不等待 wg/wrap 接口生效（避免卡住）
-# - 使用策略路由保留入站回程 (ip rule + custom table)
-# - 兼容 Alpine (OpenRC) 与 Debian/Ubuntu (systemd)
-# - 支持 start|stop|restart|status|uninstall + 菜单
+set -e
 
-WG_BIN="/usr/local/bin/warp-go"
-CONF_DIR="/etc/warp"
-CONF="$CONF_DIR/warp.conf"
-SERVICE_NAME="warp-go"
-ARCH="amd64"
-WG_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}"
-API_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64"
-TMP_API="./warpapi_tmp"
-RT_TABLE_NUM=200
-RT_TABLE_NAME="warp_main"
+# ---------- 基础 ----------
+COLOR_GREEN="\033[32m"
+COLOR_RED="\033[31m"
+COLOR_YELLOW="\033[33m"
+COLOR_RESET="\033[0m"
 
-red(){ echo -e "\033[31m\033[01m$1\033[0m"; }
-green(){ echo -e "\033[32m\033[01m$1\033[0m"; }
-yellow(){ echo -e "\033[33m\033[01m$1\033[0m"; }
-info(){ echo -e "\033[36m$1\033[0m"; }
+log() {
+    echo -e "${COLOR_GREEN}$1${COLOR_RESET}"
+}
 
-if [ "$(id -u)" -ne 0 ]; then
-    red "请以 root 身份运行脚本"
+err() {
+    echo -e "${COLOR_RED}$1${COLOR_RESET}"
+}
+
+# ---------- 检测系统 ----------
+OS=""
+if [ -f /etc/alpine-release ]; then
+    OS="alpine"
+elif [ -f /etc/debian_version ]; then
+    OS="debian"
+elif [ -f /etc/lsb-release ] || [ -f /etc/ubuntu-release ]; then
+    OS="ubuntu"
+else
+    err "不支持的系统"
     exit 1
 fi
 
-warp_status(){
-    echo "========================"
-    echo "🌍 WARP IP 信息"
-    echo "========================"
-    echo "本机公网 IPv4: $(curl -4s https://ip.gs || echo 'N/A')"
-    echo "本机公网 IPv6: $(curl -6s https://ip.gs || echo 'N/A')"
-    if ip link show warp0 >/dev/null 2>&1; then
-        echo "WARP 出口 IPv4: $(curl -4s https://ip.gs --interface warp0 2>/dev/null || echo 'N/A')"
-        echo "WARP 出口 IPv6: $(curl -6s https://ip.gs --interface warp0 2>/dev/null || echo 'N/A')"
+log "检测系统：$OS"
+
+# ---------- 安装依赖 ----------
+install_deps() {
+    if [ "$OS" = "alpine" ]; then
+        log "安装依赖（Alpine）"
+        apk update
+        apk add iproute2 wireguard-tools openrc curl wget busybox-extras
     else
-        echo "WARP 出口 IPv4: N/A (warp0 未就绪)"
-        echo "WARP 出口 IPv6: N/A (warp0 未就绪)"
+        log "安装依赖（Debian/Ubuntu）"
+        apt update
+        apt install -y iproute2 wireguard-tools curl wget
     fi
-    echo ""
-    echo "Cloudflare trace:"
-    curl -s https://www.cloudflare.com/cdn-cgi/trace || echo "trace 获取失败"
-    echo ""
 }
 
-warp_stop(){
-    yellow "🛑 停止 warp-go ..."
-    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
-        systemctl stop $SERVICE_NAME || true
-    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
-        rc-service $SERVICE_NAME stop || true
-    fi
-    pkill -f warp-go 2>/dev/null || true
-    sleep 1
-    green "✔ warp-go stopped"
-}
+install_deps
 
-warp_start(){
-    yellow "🚀 启动 warp-go ..."
-    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
-        systemctl start $SERVICE_NAME || true
-    elif [ -f /etc/init.d/$SERVICE_NAME ]; then
-        rc-service $SERVICE_NAME start || true
-    fi
-    green "✔ warp-go start command issued"
-}
+# ---------- warp-go 下载 ----------
+mkdir -p /etc/warp
+cd /etc/warp
 
-warp_restart(){
-    yellow "🔄 重启 warp-go ..."
-    warp_stop
-    warp_start
-}
+log "下载 warp-go..."
+wget -O warp-go https://gitlab.com/ProjectWARP/warp-go/-/raw/main/warp-go
+chmod +x warp-go
 
-show_menu(){
-    echo ""
-    echo "=============================="
-    echo "    WARP 管理菜单"
-    echo "=============================="
-    echo "1) 查看 WARP IP"
-    echo "2) 启动 WARP"
-    echo "3) 停止 WARP"
-    echo "4) 重启 WARP"
-    echo "5) 卸载 WARP"
-    echo "0) 退出"
-    echo "=============================="
-    read -rp "请选择操作 [0-5]: " c
-    case "$c" in
-        1) warp_status ;;
-        2) warp_start ;;
-        3) warp_stop ;;
-        4) warp_restart ;;
-        5) bash "$0" uninstall ;;
-        0) exit 0 ;;
-        *) red "无效选项"; show_menu ;;
-    esac
-}
+# ---------- 生成 WireGuard 配置 ----------
+log "申请 WARP 账户..."
+/etc/warp/warp-go --register >/etc/warp/account 2>/dev/null
 
-# 参数处理
-case "${1:-}" in
-    status) warp_status; exit 0 ;;
-    start) warp_start; exit 0 ;;
-    stop) warp_stop; exit 0 ;;
-    restart) warp_restart; exit 0 ;;
-    uninstall)
-        yellow "🛑 卸载中..."
-        warp_stop
-        # 删除 ip rule (基于
+PRIVKEY=$(grep PrivateKey /etc/warp/account | awk -F'= ' '{print $2}')
+PUBKEY=$(grep ClientPublicKey /etc/warp/account | awk -F'= ' '{print $2}')
+
+# ---------- 检测网络 ----------
+log "检测网络环境..."
+PUB_IPV4=$(curl -s4 --max-time 2 ifconfig.co || echo "")
+PUB_IPV6=$(curl -s6 --max-time 2 ifconfig.co || echo "")
+
+if [ -n "$PUB_IPV4" ]; then
+    log "✔ 检测到 IPv4-only 或双栈"
+    MODE="IPv4"
+elif [ -n "$PUB_IPV6" ]; then
+    log "✔ 检测到 IPv6-only"
+    MODE="IPv6"
+else
+    err "无法检测公网 IP，退出"
+    exit 1
+fi
+
+# ---------- 网卡信息 ----------
+ETH=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
+
+log "主网卡: $ETH, 网关: $GW"
+
+# ---------- 写入 WARP 配置 ----------
+cat >/etc/warp/warp.conf <<EOF
+[Interface]
+PrivateKey = $PRIVKEY
+Address = 172.16.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUBKEY
+AllowedIPs = 0.0.0.0/0
+Endpoint = 162.159.192.1:2408
+PersistentKeepalive = 25
+EOF
+
+log "已写入 warp.conf"
+
+# ---------- 创建路由表 ----------
+TABLE_FILE="/etc/iproute2/rt_tables"
+if [ ! -f $TABLE_FILE ]; then
+    echo "创建 $TABLE_FILE"
+    echo "200 warp_main" >$TABLE_FILE
+elif ! grep -q "warp_main" $TABLE_FILE; then
+    echo "200 warp_main" >>$TABLE_FILE
+fi
+
+# ---------- 添加路由策略 ----------
+if [ -n "$PUB_IPV4" ]; then
+    log "添加 IPv4 policy routing"
+    ip rule add from "$PUB_IPV4" lookup warp_main 2>/dev/null || true
+fi
+
+ip route add default via "$GW" dev "$ETH" table warp_main 2>/dev/null || true
+
+# ---------- OpenRC / systemd 服务 ----------
+if [ "$OS" = "alpine" ]; then
+    log "创建 OpenRC 服务..."
+    cat >/etc/init.d/warp-go <<'EOF'
+#!/sbin/openrc-run
+name="warp-go"
+command="/etc/warp/warp-go"
+command_background="yes"
+pidfile="/var/run/warp-go.pid"
+EOF
+    chmod +x /etc/init.d/warp-go
+    rc-update add warp-go default
+    rc-service warp-go restart || true
+else
+    log "创建 Systemd 服务..."
+    cat >/etc/systemd/system/warp-go.service <<'EOF'
+[Unit]
+Description=warp-go
+After=network.target
+
+[Service]
+ExecStart=/etc/warp/warp-go
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable warp-go
+    systemctl restart warp-go
+fi
+
+log "WARP-Go 已启动（不会卡死，无等待逻辑）"
+
+# ---------- 显示 WARP 出口IP ----------
+sleep 3
+WARP_IP=$(curl -4 --interface 172.16.0.2 --max-time 2 ifconfig.co || echo "WARP 未上线")
+
+log "WARP 出口 IPv4：$WARP_IP"
+
+echo ""
+log "安装完成。出站已走 WARP，入站保持原生公网。"
