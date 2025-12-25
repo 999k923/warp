@@ -60,12 +60,34 @@ warp_restart() {
     fi
     echo "✔ 已重启"
 }
+warp_ipv4_watchdog() {
+    LOG="/var/log/warp-ipv4-watch.log"
+    SERVICE="warp-go"
+
+    ipv4=$(curl -4s --max-time 6 https://ip.gs)
+
+    if [ -z "$ipv4" ]; then
+        echo "$(date '+%F %T') IPv4 掉线，重启 warp-go" >> "$LOG"
+
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart "$SERVICE"
+        elif [ -f /etc/init.d/$SERVICE ]; then
+            rc-service "$SERVICE" restart
+        fi
+    else
+        echo "$(date '+%F %T') IPv4 正常：$ipv4" >> "$LOG"
+    fi
+}
 
 # ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
 
 case "$1" in
     status)
         warp_status
+        exit 0
+    ;;
+    check-ipv4)
+        warp_ipv4_watchdog
         exit 0
     ;;
     stop)
