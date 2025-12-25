@@ -268,7 +268,7 @@ MTU = 1280
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 Endpoint = $ENDPOINT
 AllowedIPs = 0.0.0.0/0
-KeepAlive = 30
+KeepAlive = 25
 EOF
 
 
@@ -330,3 +330,17 @@ else
     red "❌ 未能获取 WARP IPv4，请查看日志："
     red "journalctl -u warp-go -n 50"
 fi
+# =====================================================
+# ========== 安装 IPv4 自动检测 cron =================
+# =====================================================
+
+SCRIPT_PATH=$(realpath "$0")
+CRON_CMD="*/2 * * * * bash $SCRIPT_PATH check-ipv4"
+
+if ! crontab -l 2>/dev/null | grep -q "check-ipv4"; then
+    (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
+    green "✅ 已启用 WARP IPv4 自动检测（每 2 分钟）"
+else
+    yellow "ℹ️ WARP IPv4 自动检测 cron 已存在"
+fi
+
