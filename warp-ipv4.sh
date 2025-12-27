@@ -66,21 +66,18 @@ warp_ipv4_watchdog() {
 
     ipv4=$(curl -4s --max-time 6 https://ip.gs)
 
-    # 只有 104.28.* 才认为是 WARP IPv4
-    if [[ "$ipv4" =~ ^104\.28\. ]]; then
-        echo "$(date '+%F %T') WARP IPv4 正常：$ipv4" >> "$LOG"
-        return
-    fi
+    if [ -z "$ipv4" ]; then
+        echo "$(date '+%F %T') IPv4 掉线，重启 warp-go" >> "$LOG"
 
-    echo "$(date '+%F %T') 非 WARP IPv4（$ipv4），重启 warp-go" >> "$LOG"
-
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl restart "$SERVICE"
-    elif [ -f /etc/init.d/$SERVICE ]; then
-        rc-service "$SERVICE" restart
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart "$SERVICE"
+        elif [ -f /etc/init.d/$SERVICE ]; then
+            rc-service "$SERVICE" restart
+        fi
+    else
+        echo "$(date '+%F %T') IPv4 正常：$ipv4" >> "$LOG"
     fi
 }
-
 
 # ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
 
@@ -216,36 +213,12 @@ chmod +x "$WG_BIN"
 # =============== warpapi 申请账户 ====================
 # =====================================================
 
-# =====================================================
-# =============== warpapi 申请账户 ====================
-# =====================================================
-
 yellow "🔑 正在申请 WARP 普通账户..."
 
-# 自动识别 CPU 架构
-ARCH_API=""
-CPU=$(uname -m)
-case "$CPU" in
-    x86_64)
-        ARCH_API="amd64"
-    ;;
-    aarch64|arm64)
-        ARCH_API="arm64"
-    ;;
-    armv7l)
-        ARCH_API="armv7"
-    ;;
-    *)
-        red "不支持的 CPU 架构：$CPU"
-        exit 1
-    ;;
-esac
-
 API_BIN="./warpapi"
-wget -O "$API_BIN" "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/$ARCH_API"
+wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
 chmod +x "$API_BIN"
 
-# 运行 warpapi 获取密钥
 output=$($API_BIN)
 private_key=$(echo "$output" | awk -F': ' '/private_key/{print $2}')
 device_id=$(echo "$output" | awk -F': ' '/device_id/{print $2}')
@@ -253,7 +226,6 @@ warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
 rm -f $API_BIN
 
 mkdir -p /etc/warp
-
 
 # =====================================================
 # ========== 检测 IPv6-only，自动选择端点 ============
@@ -270,7 +242,7 @@ else
 fi
 
 if [ "$IPv6" = "1" ]; then
-    ENDPOINT="162.159.192.1:2408"
+    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
 else
     ENDPOINT="162.159.192.1:2408"
 fi
@@ -291,7 +263,6 @@ Token = $warp_token
 Type = free
 Name = WARP
 MTU = 1280
-Table = off
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
