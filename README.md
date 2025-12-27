@@ -3,9 +3,7 @@
 ==
 
 ```bash
-wget -O warp-ipv4.sh https://raw.githubusercontent.com/999k923/warp/main/warp-ipv4.sh
-chmod +x warp-ipv4.sh
-./warp-ipv4.sh
+wget -O warp-ipv4.sh https://raw.githubusercontent.com/999k923/warp/main/warp-ipv4.sh && chmod +x warp-ipv4.sh && ./warp-ipv4.sh
 ```
 管理菜单
 =
