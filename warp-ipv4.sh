@@ -216,12 +216,36 @@ chmod +x "$WG_BIN"
 # =============== warpapi 申请账户 ====================
 # =====================================================
 
+# =====================================================
+# =============== warpapi 申请账户 ====================
+# =====================================================
+
 yellow "🔑 正在申请 WARP 普通账户..."
 
+# 自动识别 CPU 架构
+ARCH_API=""
+CPU=$(uname -m)
+case "$CPU" in
+    x86_64)
+        ARCH_API="amd64"
+    ;;
+    aarch64|arm64)
+        ARCH_API="arm64"
+    ;;
+    armv7l)
+        ARCH_API="armv7"
+    ;;
+    *)
+        red "不支持的 CPU 架构：$CPU"
+        exit 1
+    ;;
+esac
+
 API_BIN="./warpapi"
-wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
+wget -O "$API_BIN" "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/$ARCH_API"
 chmod +x "$API_BIN"
 
+# 运行 warpapi 获取密钥
 output=$($API_BIN)
 private_key=$(echo "$output" | awk -F': ' '/private_key/{print $2}')
 device_id=$(echo "$output" | awk -F': ' '/device_id/{print $2}')
@@ -229,6 +253,7 @@ warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
 rm -f $API_BIN
 
 mkdir -p /etc/warp
+
 
 # =====================================================
 # ========== 检测 IPv6-only，自动选择端点 ============
