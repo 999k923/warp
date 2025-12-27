@@ -1,5 +1,4 @@
-只适用于ipv6only vps的warp，有ipv4别安装。
-==
+
 一键运行命令直接获取warp ipv4，没有其他多余功能
 =
 ```bash
