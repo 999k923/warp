@@ -8,17 +8,17 @@ yellow(){ echo -e "\033[33m\033[01m$1\033[0m"; }
 
 WG_BIN="/usr/local/bin/warp-go"
 CONF="/etc/warp/warp.conf"
+# =====================================================
+# =============== 通用功能：start/stop/status =========
+# =====================================================
 
 SERVICE_NAME="warp-go"
-
-# =====================================================
-# =============== 状态 / 控制 =========================
-# =====================================================
 
 warp_status() {
     echo "========================"
     echo "🌍 WARP IP 信息"
     echo "========================"
+    echo ""
     echo "🔸 IPv4:"
     curl -4s https://ip.gs || echo "未获取 IPv4"
     echo ""
@@ -31,83 +31,160 @@ warp_status() {
 }
 
 warp_stop() {
+    echo "🛑 停止 WARP 服务..."
     if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
         systemctl stop $SERVICE_NAME
     elif [ -f /etc/init.d/$SERVICE_NAME ]; then
         rc-service $SERVICE_NAME stop
     fi
     pkill -f warp-go 2>/dev/null || true
+    echo "✔ 已停止"
 }
 
 warp_start() {
+    echo "🚀 启动 WARP 服务..."
     if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
         systemctl start $SERVICE_NAME
     elif [ -f /etc/init.d/$SERVICE_NAME ]; then
         rc-service $SERVICE_NAME start
     fi
+    echo "✔ 已启动"
 }
 
 warp_restart() {
+    echo "🔄 重启 WARP 服务..."
     if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
         systemctl restart $SERVICE_NAME
     elif [ -f /etc/init.d/$SERVICE_NAME ]; then
         rc-service $SERVICE_NAME restart
     fi
+    echo "✔ 已重启"
 }
-
-# =====================================================
-# =============== IPv4 Watchdog（★ 修改重点） =========
-# =====================================================
 warp_ipv4_watchdog() {
     LOG="/var/log/warp-ipv4-watch.log"
     SERVICE="warp-go"
 
     ipv4=$(curl -4s --max-time 6 https://ip.gs)
 
-    # ★ 修改 1：获取不到 IPv4
     if [ -z "$ipv4" ]; then
-        echo "$(date '+%F %T') IPv4 获取失败，重启 warp-go" >> "$LOG"
-        warp_restart
-        return
-    fi
+        echo "$(date '+%F %T') IPv4 掉线，重启 warp-go" >> "$LOG"
 
-    # ★ 修改 2：不是 WARP IPv4（104.28.*）
-    if [[ "$ipv4" =~ ^104\.28\. ]]; then
-        echo "$(date '+%F %T') WARP IPv4 正常：$ipv4" >> "$LOG"
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart "$SERVICE"
+        elif [ -f /etc/init.d/$SERVICE ]; then
+            rc-service "$SERVICE" restart
+        fi
     else
-        echo "$(date '+%F %T') 非 WARP IPv4：$ipv4，重启 warp-go" >> "$LOG"
-        warp_restart
+        echo "$(date '+%F %T') IPv4 正常：$ipv4" >> "$LOG"
     fi
 }
 
-# =====================================================
-# =============== 参数处理 =============================
-# =====================================================
+# ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
+
 case "$1" in
-    status) warp_status; exit 0 ;;
-    check-ipv4) warp_ipv4_watchdog; exit 0 ;;
-    stop) warp_stop; exit 0 ;;
-    start) warp_start; exit 0 ;;
-    restart) warp_restart; exit 0 ;;
-    uninstall) ;;
-    ""|install) yellow "开始安装 WARP..." ;;
-    *) red "未知命令：$1"; exit 1 ;;
+    status)
+        warp_status
+        exit 0
+    ;;
+    check-ipv4)
+        warp_ipv4_watchdog
+        exit 0
+    ;;
+    stop)
+        warp_stop
+        exit 0
+    ;;
+    start)
+        warp_start
+        exit 0
+    ;;
+    restart)
+        warp_restart
+        exit 0
+    ;;
+    uninstall)
+        # 卸载逻辑保留，原来部分继续向下执行
+    ;;
+    ""|install)
+        yellow "开始安装 WARP..."
+    ;;
+    *)
+        red "未知命令：$1"
+        echo "可用命令：install / uninstall / status / start / stop / restart"
+        exit 1
+    ;;
 esac
+# =====================================================
+# ===============  卸载功能（可选）  ==================
+# =====================================================
+if [ "$1" = "uninstall" ]; then
+    yellow "🛑 正在卸载 warp-go..."
+
+    if systemctl list-unit-files | grep -q warp-go; then
+        systemctl stop warp-go 2>/dev/null || true
+        systemctl disable warp-go 2>/dev/null || true
+        rm -f /etc/systemd/system/warp-go.service
+        systemctl daemon-reload
+    fi
+
+    if [ -f /etc/init.d/warp-go ]; then
+        rc-service warp-go stop || true
+        rc-update del warp-go default || true
+        rm -f /etc/init.d/warp-go
+    fi
+
+    pkill -f warp-go 2>/dev/null || true
+
+    rm -rf /etc/warp
+    rm -f "$WG_BIN"
+
+    green "✅ warp-go 已完全卸载"
+    exit 0
+fi
+
 
 # =====================================================
-# =============== 清理旧进程 ==========================
+# ============ 脚本开头加入安全卸载逻辑 ==============
 # =====================================================
+
+yellow "🧹 清理旧 warp-go 进程（防 Text file busy）..."
+
+# 停止旧 systemd 服务
+if systemctl list-unit-files | grep -q warp-go; then
+    systemctl stop warp-go 2>/dev/null || true
+fi
+
+# 停止旧 openrc 服务
+if [ -f /etc/init.d/warp-go ]; then
+    rc-service warp-go stop 2>/dev/null || true
+fi
+
+# 杀死所有 warp-go 进程
 pkill -f warp-go 2>/dev/null || true
+sleep 1
+
+# 删除旧二进制
 rm -f "$WG_BIN" 2>/dev/null || true
 
-# =====================================================
-# =============== 系统检测 ===========================
-# =====================================================
-. /etc/os-release
-SYS=$ID
 
+# =====================================================
+# ===============  系统检测 ===========================
+# =====================================================
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    SYS=$ID
+else
+    red "无法识别系统"
+    exit 1
+fi
+
+yellow "检测到系统：$SYS"
+
+# ======== 安装依赖 ===========
 case "$SYS" in
     alpine)
+        apk update
         apk add --no-cache bash curl wget iproute2 wireguard-tools openrc
         SYSTEMD=0
     ;;
@@ -116,32 +193,68 @@ case "$SYS" in
         apt-get install -y curl wget iproute2 wireguard-tools
         SYSTEMD=1
     ;;
-    *) red "不支持的系统"; exit 1 ;;
+    *)
+        red "不支持的系统：$SYS"
+        exit 1
+    ;;
 esac
 
 # =====================================================
 # =============== 下载 warp-go ========================
 # =====================================================
-wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_amd64
+
+ARCH="amd64"
+
+yellow "⬇️ 下载 warp-go ..."
+wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}
 chmod +x "$WG_BIN"
 
 # =====================================================
-# =============== 申请账户 ============================
+# =============== warpapi 申请账户 ====================
 # =====================================================
-wget -O warpapi https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
-chmod +x warpapi
-output=$(./warpapi)
-rm -f warpapi
 
+yellow "🔑 正在申请 WARP 普通账户..."
+
+API_BIN="./warpapi"
+wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
+chmod +x "$API_BIN"
+
+output=$($API_BIN)
 private_key=$(echo "$output" | awk -F': ' '/private_key/{print $2}')
 device_id=$(echo "$output" | awk -F': ' '/device_id/{print $2}')
 warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
+rm -f $API_BIN
 
 mkdir -p /etc/warp
 
 # =====================================================
+# ========== 检测 IPv6-only，自动选择端点 ============
+# =====================================================
+
+yellow "🌐 检测网络环境..."
+
+if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
+    IPv6=1
+    yellow "✔ 检测到 IPv6 可用"
+else
+    IPv6=0
+    yellow "⚠ 未检测到 IPv6"
+fi
+
+if [ "$IPv6" = "1" ]; then
+    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+else
+    ENDPOINT="162.159.192.1:2408"
+fi
+
+yellow "使用端点：$ENDPOINT"
+
+# =====================================================
 # =============== 生成 warp.conf ======================
 # =====================================================
+
+CONF="/etc/warp/warp.conf"
+
 cat > $CONF <<EOF
 [Account]
 Device = $device_id
@@ -153,50 +266,80 @@ MTU = 1280
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-Endpoint = 162.159.192.1:2408
+Endpoint = $ENDPOINT
 AllowedIPs = 0.0.0.0/0
-Table = off        # ★ 修改 3：不抢系统默认路由
 KeepAlive = 25
 EOF
 
+
 # =====================================================
-# =============== 创建服务 ============================
+# ===============  创建并启动服务  ====================
 # =====================================================
+
 if [ "$SYSTEMD" = "1" ]; then
-cat > /etc/systemd/system/warp-go.service <<EOF
+    yellow "🛠 创建 systemd 服务..."
+
+    cat > /etc/systemd/system/warp-go.service <<EOF
 [Unit]
-Description=warp-go
+Description=warp-go service
 After=network.target
 
 [Service]
-ExecStart=$WG_BIN --config=$CONF
+ExecStart=${WG_BIN} --config=${CONF}
 Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
     systemctl daemon-reload
     systemctl enable warp-go
     systemctl restart warp-go
+
 else
-cat > /etc/init.d/warp-go <<EOF
+    yellow "🛠 创建 OpenRC 服务..."
+
+    SERVICE_FILE="/etc/init.d/warp-go"
+    cat > $SERVICE_FILE <<EOF
 #!/sbin/openrc-run
-command="$WG_BIN"
-command_args="--config=$CONF"
+command="${WG_BIN}"
+command_args="--config=${CONF}"
 command_background="yes"
+pidfile="/var/run/warp-go.pid"
 EOF
-    chmod +x /etc/init.d/warp-go
+
+    chmod +x $SERVICE_FILE
     rc-update add warp-go default
     rc-service warp-go restart
 fi
 
+sleep 2
+
 # =====================================================
-# =============== 安装 cron ===========================
+# =============== 输出结果 ============================
 # =====================================================
+
+ipv4=$(curl -4s https://ip.gs || true)
+
+if [ -n "$ipv4" ]; then
+    green "================================="
+    green " 🎉 WARP IPv4 获取成功：$ipv4"
+    green "================================="
+else
+    red "❌ 未能获取 WARP IPv4，请查看日志："
+    red "journalctl -u warp-go -n 50"
+fi
+# =====================================================
+# ========== 安装 IPv4 自动检测 cron =================
+# =====================================================
+
 SCRIPT_PATH=$(realpath "$0")
 CRON_CMD="*/2 * * * * bash $SCRIPT_PATH check-ipv4"
 
-(crontab -l 2>/dev/null | grep -q check-ipv4) || \
-(crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-
-green "✅ WARP 安装完成（TUN 出站 + 正确 IPv4 检测）"
+if ! crontab -l 2>/dev/null | grep -q "check-ipv4"; then
+    (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
+    green "✅ 已启用 WARP IPv4 自动检测（每 2 分钟）"
+else
+    yellow "ℹ️ WARP IPv4 自动检测 cron 已存在"
+fi
