@@ -270,7 +270,7 @@ else
 fi
 
 if [ "$IPv6" = "1" ]; then
-    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    ENDPOINT="162.159.192.1:2408"
 else
     ENDPOINT="162.159.192.1:2408"
 fi
