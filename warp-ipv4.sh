@@ -285,23 +285,69 @@ fi
 sleep 2
 
 # =====================================================
-# =============== 启动 IPv4 watchdog =================
+# =============== 启动 IPv4 Watchdog =================
 # =====================================================
 
-yellow "🛡 启动 WARP IPv4 Watchdog (每 20 分钟检测一次)..."
-nohup bash -c '
+WATCHDOG_SCRIPT="/usr/local/bin/warp-ipv4-watchdog.sh"
 LOG="/var/log/warp-ipv4-watch.log"
+
+cat > $WATCHDOG_SCRIPT <<'EOF'
+#!/bin/bash
 SERVICE="warp-go"
+LOG="/var/log/warp-ipv4-watch.log"
+
 while true; do
     ipv4=$(curl -4s --max-time 10 https://ip.gs || echo "0.0.0.0")
     if [[ ! "$ipv4" =~ ^104\.28\. ]]; then
         echo "$(date "+%F %T") IPv4 非 WARP（$ipv4），重启 warp-go" >> "$LOG"
-        systemctl restart "$SERVICE" >/dev/null 2>&1 || true
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart "$SERVICE" >/dev/null 2>&1 || true
+        elif [ -f /etc/init.d/$SERVICE ]; then
+            rc-service "$SERVICE" restart >/dev/null 2>&1 || true
+        fi
+    else
+        echo "$(date "+%F %T") IPv4 正常：$ipv4" >> "$LOG"
     fi
-    sleep 1200  # 20 分钟
+    sleep 1200  # 每 20 分钟检测一次
 done
-' >/dev/null 2>&1 &
-green "✅ Watchdog 已启动，每 20 分钟检测一次 WARP IPv4"
+EOF
+
+chmod +x $WATCHDOG_SCRIPT
+
+# ====== 创建 systemd / openrc 服务来开机自启 ======
+if [ "$SYSTEMD" = "1" ]; then
+    cat > /etc/systemd/system/warp-ipv4-watchdog.service <<EOF
+[Unit]
+Description=WARP IPv4 Watchdog
+After=network.target
+
+[Service]
+ExecStart=$WATCHDOG_SCRIPT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable warp-ipv4-watchdog
+    systemctl start warp-ipv4-watchdog
+else
+    # OpenRC 服务
+    SERVICE_FILE="/etc/init.d/warp-ipv4-watchdog"
+    cat > $SERVICE_FILE <<EOF
+#!/sbin/openrc-run
+command="$WATCHDOG_SCRIPT"
+command_background="yes"
+pidfile="/var/run/warp-ipv4-watchdog.pid"
+EOF
+    chmod +x $SERVICE_FILE
+    rc-update add warp-ipv4-watchdog default
+    rc-service warp-ipv4-watchdog start
+fi
+
+green "✅ WARP IPv4 Watchdog 已启动，每 20 分钟检测一次，并支持开机自启"
+`
 
 
 # =====================================================
