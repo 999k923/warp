@@ -60,26 +60,6 @@ warp_restart() {
     fi
     echo "✔ 已重启"
 }
-warp_ipv4_watchdog() {
-    LOG="/var/log/warp-ipv4-watch.log"
-    SERVICE="warp-go"
-
-    ipv4=$(curl -4s --max-time 6 https://ip.gs)
-
-    # 只有 104.28.* 才认为是 WARP IPv4
-    if [[ "$ipv4" =~ ^104\.28\. ]]; then
-        echo "$(date '+%F %T') WARP IPv4 正常：$ipv4" >> "$LOG"
-        return
-    fi
-
-    echo "$(date '+%F %T') 非 WARP IPv4（$ipv4），重启 warp-go" >> "$LOG"
-
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl restart "$SERVICE"
-    elif [ -f /etc/init.d/$SERVICE ]; then
-        rc-service "$SERVICE" restart
-    fi
-}
 
 
 # ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
@@ -264,7 +244,7 @@ EOF
 
 
 # =====================================================
-# ===============  创建并启动服务  ====================
+# =============== 创建并启动服务 ====================
 # =====================================================
 
 if [ "$SYSTEMD" = "1" ]; then
@@ -287,10 +267,8 @@ EOF
     systemctl daemon-reload
     systemctl enable warp-go
     systemctl restart warp-go
-
 else
     yellow "🛠 创建 OpenRC 服务..."
-
     SERVICE_FILE="/etc/init.d/warp-go"
     cat > $SERVICE_FILE <<EOF
 #!/sbin/openrc-run
@@ -299,13 +277,32 @@ command_args="--config=${CONF}"
 command_background="yes"
 pidfile="/var/run/warp-go.pid"
 EOF
-
     chmod +x $SERVICE_FILE
     rc-update add warp-go default
     rc-service warp-go restart
 fi
 
 sleep 2
+
+# =====================================================
+# =============== 启动 IPv4 watchdog =================
+# =====================================================
+
+yellow "🛡 启动 WARP IPv4 Watchdog (每 20 分钟检测一次)..."
+nohup bash -c '
+LOG="/var/log/warp-ipv4-watch.log"
+SERVICE="warp-go"
+while true; do
+    ipv4=$(curl -4s --max-time 10 https://ip.gs || echo "0.0.0.0")
+    if [[ ! "$ipv4" =~ ^104\.28\. ]]; then
+        echo "$(date "+%F %T") IPv4 非 WARP（$ipv4），重启 warp-go" >> "$LOG"
+        systemctl restart "$SERVICE" >/dev/null 2>&1 || true
+    fi
+    sleep 1200  # 20 分钟
+done
+' >/dev/null 2>&1 &
+green "✅ Watchdog 已启动，每 20 分钟检测一次 WARP IPv4"
+
 
 # =====================================================
 # =============== 输出结果 ============================
