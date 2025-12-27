@@ -66,18 +66,21 @@ warp_ipv4_watchdog() {
 
     ipv4=$(curl -4s --max-time 6 https://ip.gs)
 
-    if [ -z "$ipv4" ]; then
-        echo "$(date '+%F %T') IPv4 掉线，重启 warp-go" >> "$LOG"
+    # 只有 104.28.* 才认为是 WARP IPv4
+    if [[ "$ipv4" =~ ^104\.28\. ]]; then
+        echo "$(date '+%F %T') WARP IPv4 正常：$ipv4" >> "$LOG"
+        return
+    fi
 
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl restart "$SERVICE"
-        elif [ -f /etc/init.d/$SERVICE ]; then
-            rc-service "$SERVICE" restart
-        fi
-    else
-        echo "$(date '+%F %T') IPv4 正常：$ipv4" >> "$LOG"
+    echo "$(date '+%F %T') 非 WARP IPv4（$ipv4），重启 warp-go" >> "$LOG"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart "$SERVICE"
+    elif [ -f /etc/init.d/$SERVICE ]; then
+        rc-service "$SERVICE" restart
     fi
 }
+
 
 # ========== 处理命令行参数（install / status / start / stop / restart / uninstall） ==========
 
@@ -263,6 +266,7 @@ Token = $warp_token
 Type = free
 Name = WARP
 MTU = 1280
+Table = off
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
