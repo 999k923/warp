@@ -363,7 +363,7 @@ LOG="/var/log/warp-ipv4-watch.log"
 
 while true; do
     ipv4=$(curl -4s --max-time 10 https://ip.gs || echo "0.0.0.0")
-    if [[ ! "$ipv4" =~ ^104\.28\. ]]; then
+    if [[ ! "$ipv4" =~ ^(104\.28\.|104\.16\.|162\.159\.|172\.64\.) ]]; then
         echo "$(date "+%F %T") IPv4 非 WARP（$ipv4），重启 warp-go" >> "$LOG"
         if command -v systemctl >/dev/null 2>&1; then
             systemctl restart "$SERVICE" >/dev/null 2>&1 || true
