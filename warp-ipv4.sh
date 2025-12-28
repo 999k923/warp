@@ -97,12 +97,11 @@ case "$1" in
         exit 1
     ;;
 esac
-# =====================================================
-# ===============  卸载功能（可选）  ==================
-# =====================================================
+# =============== 卸载功能（完整） ==================
 if [ "$1" = "uninstall" ]; then
-    yellow "🛑 正在卸载 warp-go..."
+    yellow "🛑 正在卸载 warp-go 和 Watchdog..."
 
+    # 停止并删除 warp-go
     if systemctl list-unit-files | grep -q warp-go; then
         systemctl stop warp-go 2>/dev/null || true
         systemctl disable warp-go 2>/dev/null || true
@@ -117,13 +116,31 @@ if [ "$1" = "uninstall" ]; then
     fi
 
     pkill -f warp-go 2>/dev/null || true
-
-    rm -rf /etc/warp
     rm -f "$WG_BIN"
+    rm -rf /etc/warp
 
-    green "✅ warp-go 已完全卸载"
+    # 停止并删除 warp-ipv4-watchdog
+    if systemctl list-unit-files | grep -q warp-ipv4-watchdog; then
+        systemctl stop warp-ipv4-watchdog 2>/dev/null || true
+        systemctl disable warp-ipv4-watchdog 2>/dev/null || true
+        rm -f /etc/systemd/system/warp-ipv4-watchdog.service
+        systemctl daemon-reload
+    fi
+
+    if [ -f /etc/init.d/warp-ipv4-watchdog ]; then
+        rc-service warp-ipv4-watchdog stop || true
+        rc-update del warp-ipv4-watchdog default || true
+        rm -f /etc/init.d/warp-ipv4-watchdog
+    fi
+
+    pkill -f warp-ipv4-watchdog 2>/dev/null || true
+    rm -f /usr/local/bin/warp-ipv4-watchdog.sh
+    rm -f /var/log/warp-ipv4-watch.log 2>/dev/null || true
+
+    green "✅ warp-go 和 Watchdog 已完全卸载"
     exit 0
 fi
+
 
 
 # =====================================================
