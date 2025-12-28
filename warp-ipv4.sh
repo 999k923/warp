@@ -203,10 +203,26 @@ esac
 # =============== 下载 warp-go ========================
 # =====================================================
 
-ARCH="amd64"
+# 自动识别架构
+ARCH_RAW=$(uname -m)
 
-yellow "⬇️ 下载 warp-go ..."
-wget -O "$WG_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${ARCH}
+case "$ARCH_RAW" in
+    x86_64|amd64)
+        ARCH="amd64"
+        WARP_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_amd64"
+        ;;
+    aarch64|arm64)
+        ARCH="arm64"
+        WARP_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_arm64"
+        ;;
+    *)
+        red "❌ 不支持的架构：$ARCH_RAW"
+        exit 1
+        ;;
+esac
+
+yellow "⬇️ 下载 warp-go（架构：$ARCH）..."
+wget -O "$WG_BIN" "$WARP_URL"
 chmod +x "$WG_BIN"
 
 # =====================================================
@@ -216,16 +232,36 @@ chmod +x "$WG_BIN"
 yellow "🔑 正在申请 WARP 普通账户..."
 
 API_BIN="./warpapi"
-wget -O "$API_BIN" https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64
+
+ARCH_RAW=$(uname -m)
+
+case "$ARCH_RAW" in
+    x86_64|amd64)
+        WARPAPI_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/amd64"
+        ;;
+    aarch64|arm64)
+        WARPAPI_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/arm64"
+        ;;
+    *)
+        red "❌ 不支持的架构（warpapi）：$ARCH_RAW"
+        exit 1
+        ;;
+esac
+
+yellow "⬇️ 下载 warpapi（架构：$ARCH_RAW）..."
+wget -O "$API_BIN" "$WARPAPI_URL"
 chmod +x "$API_BIN"
 
 output=$($API_BIN)
+
 private_key=$(echo "$output" | awk -F': ' '/private_key/{print $2}')
 device_id=$(echo "$output" | awk -F': ' '/device_id/{print $2}')
 warp_token=$(echo "$output" | awk -F': ' '/token/{print $2}')
-rm -f $API_BIN
+
+rm -f "$API_BIN"
 
 mkdir -p /etc/warp
+
 
 # =====================================================
 # ========== 检测 IPv6-only，自动选择端点 ============
