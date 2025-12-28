@@ -209,11 +209,11 @@ ARCH_RAW=$(uname -m)
 case "$ARCH_RAW" in
     x86_64|amd64)
         ARCH="amd64"
-        WARP_URL="https://github.com/999k923/warp/raw/refs/heads/main/warp-go_1.0.8_linux_amd64"
+        WARP_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_amd64"
         ;;
     aarch64|arm64)
         ARCH="arm64"
-        WARP_URL="https://github.com/999k923/warp/raw/refs/heads/main/warp-go_1.0.8_linux_arm64"
+        WARP_URL="https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_arm64"
         ;;
     *)
         red "❌ 不支持的架构：$ARCH_RAW"
