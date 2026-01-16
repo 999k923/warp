@@ -267,86 +267,20 @@ mkdir -p /etc/warp
 # ========== 检测 IPv6-only，自动选择端点 ============
 # =====================================================
 
-ENDPOINT_MODE="${WARP_ENDPOINT_MODE:-auto}"
-ENDPOINT_V4="${WARP_ENDPOINT_V4:-162.159.192.1}"
-ENDPOINT_V6="${WARP_ENDPOINT_V6:-2606:4700:d0::a29f:c005}"
-
 yellow "🌐 检测网络环境..."
 
-IPv6=0
-if command -v ping6 >/dev/null 2>&1; then
-    if ping6 -c1 -W1 2606:4700:4700::1111 >/dev/null 2>&1; then
-        IPv6=1
-    fi
-elif command -v ping >/dev/null 2>&1; then
-    if ping -6 -c1 -W1 2606:4700:4700::1111 >/dev/null 2>&1; then
-        IPv6=1
-    fi
-fi
-
-IPv4=0
-if command -v curl >/dev/null 2>&1; then
-    if curl -4s --max-time 3 https://ip.gs >/dev/null 2>&1; then
-        IPv4=1
-    fi
-fi
-
-if [ "$IPv6" = "1" ]; then
+if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
+    IPv6=1
     yellow "✔ 检测到 IPv6 可用"
 else
+    IPv6=0
     yellow "⚠ 未检测到 IPv6"
 fi
 
-if [ "$IPv4" = "1" ]; then
-    yellow "✔ 检测到 IPv4 可用"
+if [ "$IPv6" = "1" ]; then
+    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
 else
-    yellow "⚠ 未检测到 IPv4"
-fi
-
-if [ "$ENDPOINT_MODE" = "ipv6" ]; then
-    if [ "$IPv6" = "1" ]; then
-        yellow "🌐 已强制使用 IPv6 端点"
-        ENDPOINT="[$ENDPOINT_V6]:2408"
-        ENDPOINT_IP="$ENDPOINT_V6"
-        ENDPOINT_FAMILY="ipv6"
-    elif [ "$IPv4" = "1" ]; then
-        yellow "⚠ IPv6 不可用，已回退到 IPv4 端点"
-        ENDPOINT="$ENDPOINT_V4:2408"
-        ENDPOINT_IP="$ENDPOINT_V4"
-        ENDPOINT_FAMILY="ipv4"
-    else
-        yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv6 端点"
-        ENDPOINT="[$ENDPOINT_V6]:2408"
-        ENDPOINT_IP="$ENDPOINT_V6"
-        ENDPOINT_FAMILY="ipv6"
-    fi
-elif [ "$ENDPOINT_MODE" = "ipv4" ]; then
-    if [ "$IPv4" = "1" ]; then
-        yellow "🌐 已强制使用 IPv4 端点"
-        ENDPOINT="$ENDPOINT_V4:2408"
-        ENDPOINT_IP="$ENDPOINT_V4"
-        ENDPOINT_FAMILY="ipv4"
-    elif [ "$IPv6" = "1" ]; then
-        yellow "⚠ IPv4 不可用，已回退到 IPv6 端点"
-        ENDPOINT="[$ENDPOINT_V6]:2408"
-        ENDPOINT_IP="$ENDPOINT_V6"
-        ENDPOINT_FAMILY="ipv6"
-    else
-        yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv4 端点"
-        ENDPOINT="$ENDPOINT_V4:2408"
-        ENDPOINT_IP="$ENDPOINT_V4"
-        ENDPOINT_FAMILY="ipv4"
-    fi
-else
-    if [ "$IPv6" = "1" ]; then
-        ENDPOINT="[$ENDPOINT_V6]:2408"
-        ENDPOINT_IP="$ENDPOINT_V6"
-        ENDPOINT_FAMILY="ipv6"
-    else
-        ENDPOINT="$ENDPOINT_V4:2408"
-        ENDPOINT_IP="$ENDPOINT_V4"
-        ENDPOINT_FAMILY="ipv4"
-    fi
+    ENDPOINT="162.159.192.1:2408"
 fi
 
 yellow "使用端点：$ENDPOINT"
@@ -377,28 +311,6 @@ EOF
 # =====================================================
 # =============== 创建并启动服务 ====================
 # =====================================================
-
-if [ "$ENDPOINT_FAMILY" = "ipv4" ]; then
-    DEFAULT_ROUTE=$(ip -4 route show default | head -n 1)
-    DEFAULT_GW=$(echo "$DEFAULT_ROUTE" | awk '{print $3}')
-    DEFAULT_DEV=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
-    if [ -n "$DEFAULT_GW" ] && [ -n "$DEFAULT_DEV" ]; then
-        ip -4 route replace "$ENDPOINT_IP"/32 via "$DEFAULT_GW" dev "$DEFAULT_DEV" || true
-        yellow "✅ 已为 IPv4 端点添加直连路由：$ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV"
-    else
-        yellow "⚠ 未获取到 IPv4 默认网关，可能影响 IPv4 端点连通性"
-    fi
-elif [ "$ENDPOINT_FAMILY" = "ipv6" ]; then
-    DEFAULT_ROUTE=$(ip -6 route show default | head -n 1)
-    DEFAULT_GW=$(echo "$DEFAULT_ROUTE" | awk '{print $3}')
-    DEFAULT_DEV=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
-    if [ -n "$DEFAULT_GW" ] && [ -n "$DEFAULT_DEV" ]; then
-        ip -6 route replace "$ENDPOINT_IP"/128 via "$DEFAULT_GW" dev "$DEFAULT_DEV" || true
-        yellow "✅ 已为 IPv6 端点添加直连路由：$ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV"
-    else
-        yellow "⚠ 未获取到 IPv6 默认网关，可能影响 IPv6 端点连通性"
-    fi
-fi
 
 if [ "$SYSTEMD" = "1" ]; then
     yellow "🛠 创建 systemd 服务..."
