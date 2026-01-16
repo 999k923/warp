@@ -268,6 +268,8 @@ mkdir -p /etc/warp
 # =====================================================
 
 ENDPOINT_MODE="${WARP_ENDPOINT_MODE:-auto}"
+ENDPOINT_V4="${WARP_ENDPOINT_V4:-162.159.192.1}"
+ENDPOINT_V6="${WARP_ENDPOINT_V6:-2606:4700:d0::a29f:c005}"
 
 yellow "🌐 检测网络环境..."
 
@@ -304,45 +306,45 @@ fi
 if [ "$ENDPOINT_MODE" = "ipv6" ]; then
     if [ "$IPv6" = "1" ]; then
         yellow "🌐 已强制使用 IPv6 端点"
-        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT="[$ENDPOINT_V6]:2408"
+        ENDPOINT_IP="$ENDPOINT_V6"
         ENDPOINT_FAMILY="ipv6"
     elif [ "$IPv4" = "1" ]; then
         yellow "⚠ IPv6 不可用，已回退到 IPv4 端点"
-        ENDPOINT="162.159.192.1:2408"
-        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT="$ENDPOINT_V4:2408"
+        ENDPOINT_IP="$ENDPOINT_V4"
         ENDPOINT_FAMILY="ipv4"
     else
         yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv6 端点"
-        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT="[$ENDPOINT_V6]:2408"
+        ENDPOINT_IP="$ENDPOINT_V6"
         ENDPOINT_FAMILY="ipv6"
     fi
 elif [ "$ENDPOINT_MODE" = "ipv4" ]; then
     if [ "$IPv4" = "1" ]; then
         yellow "🌐 已强制使用 IPv4 端点"
-        ENDPOINT="162.159.192.1:2408"
-        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT="$ENDPOINT_V4:2408"
+        ENDPOINT_IP="$ENDPOINT_V4"
         ENDPOINT_FAMILY="ipv4"
     elif [ "$IPv6" = "1" ]; then
         yellow "⚠ IPv4 不可用，已回退到 IPv6 端点"
-        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT="[$ENDPOINT_V6]:2408"
+        ENDPOINT_IP="$ENDPOINT_V6"
         ENDPOINT_FAMILY="ipv6"
     else
         yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv4 端点"
-        ENDPOINT="162.159.192.1:2408"
-        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT="$ENDPOINT_V4:2408"
+        ENDPOINT_IP="$ENDPOINT_V4"
         ENDPOINT_FAMILY="ipv4"
     fi
 else
     if [ "$IPv6" = "1" ]; then
-        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT="[$ENDPOINT_V6]:2408"
+        ENDPOINT_IP="$ENDPOINT_V6"
         ENDPOINT_FAMILY="ipv6"
     else
-        ENDPOINT="162.159.192.1:2408"
-        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT="$ENDPOINT_V4:2408"
+        ENDPOINT_IP="$ENDPOINT_V4"
         ENDPOINT_FAMILY="ipv4"
     fi
 fi
