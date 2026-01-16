@@ -267,20 +267,68 @@ mkdir -p /etc/warp
 # ========== 检测 IPv6-only，自动选择端点 ============
 # =====================================================
 
+ENDPOINT_MODE="${WARP_ENDPOINT_MODE:-auto}"
+
 yellow "🌐 检测网络环境..."
 
-if ping6 -c1 2606:4700:4700::1111 >/dev/null 2>&1; then
-    IPv6=1
-    yellow "✔ 检测到 IPv6 可用"
-else
-    IPv6=0
-    yellow "⚠ 未检测到 IPv6"
+IPv6=0
+if command -v ping6 >/dev/null 2>&1; then
+    if ping6 -c1 -W1 2606:4700:4700::1111 >/dev/null 2>&1; then
+        IPv6=1
+    fi
+elif command -v ping >/dev/null 2>&1; then
+    if ping -6 -c1 -W1 2606:4700:4700::1111 >/dev/null 2>&1; then
+        IPv6=1
+    fi
+fi
+
+IPv4=0
+if command -v curl >/dev/null 2>&1; then
+    if curl -4s --max-time 3 https://ip.gs >/dev/null 2>&1; then
+        IPv4=1
+    fi
 fi
 
 if [ "$IPv6" = "1" ]; then
-    ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    yellow "✔ 检测到 IPv6 可用"
 else
-    ENDPOINT="162.159.192.1:2408"
+    yellow "⚠ 未检测到 IPv6"
+fi
+
+if [ "$IPv4" = "1" ]; then
+    yellow "✔ 检测到 IPv4 可用"
+else
+    yellow "⚠ 未检测到 IPv4"
+fi
+
+if [ "$ENDPOINT_MODE" = "ipv6" ]; then
+    if [ "$IPv6" = "1" ]; then
+        yellow "🌐 已强制使用 IPv6 端点"
+        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    elif [ "$IPv4" = "1" ]; then
+        yellow "⚠ IPv6 不可用，已回退到 IPv4 端点"
+        ENDPOINT="162.159.192.1:2408"
+    else
+        yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv6 端点"
+        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    fi
+elif [ "$ENDPOINT_MODE" = "ipv4" ]; then
+    if [ "$IPv4" = "1" ]; then
+        yellow "🌐 已强制使用 IPv4 端点"
+        ENDPOINT="162.159.192.1:2408"
+    elif [ "$IPv6" = "1" ]; then
+        yellow "⚠ IPv4 不可用，已回退到 IPv6 端点"
+        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    else
+        yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv4 端点"
+        ENDPOINT="162.159.192.1:2408"
+    fi
+else
+    if [ "$IPv6" = "1" ]; then
+        ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+    else
+        ENDPOINT="162.159.192.1:2408"
+    fi
 fi
 
 yellow "使用端点：$ENDPOINT"
