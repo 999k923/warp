@@ -305,29 +305,45 @@ if [ "$ENDPOINT_MODE" = "ipv6" ]; then
     if [ "$IPv6" = "1" ]; then
         yellow "🌐 已强制使用 IPv6 端点"
         ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT_FAMILY="ipv6"
     elif [ "$IPv4" = "1" ]; then
         yellow "⚠ IPv6 不可用，已回退到 IPv4 端点"
         ENDPOINT="162.159.192.1:2408"
+        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT_FAMILY="ipv4"
     else
         yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv6 端点"
         ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT_FAMILY="ipv6"
     fi
 elif [ "$ENDPOINT_MODE" = "ipv4" ]; then
     if [ "$IPv4" = "1" ]; then
         yellow "🌐 已强制使用 IPv4 端点"
         ENDPOINT="162.159.192.1:2408"
+        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT_FAMILY="ipv4"
     elif [ "$IPv6" = "1" ]; then
         yellow "⚠ IPv4 不可用，已回退到 IPv6 端点"
         ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT_FAMILY="ipv6"
     else
         yellow "⚠ IPv6/IPv4 均不可用，仍使用 IPv4 端点"
         ENDPOINT="162.159.192.1:2408"
+        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT_FAMILY="ipv4"
     fi
 else
     if [ "$IPv6" = "1" ]; then
         ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
+        ENDPOINT_IP="2606:4700:d0::a29f:c005"
+        ENDPOINT_FAMILY="ipv6"
     else
         ENDPOINT="162.159.192.1:2408"
+        ENDPOINT_IP="162.159.192.1"
+        ENDPOINT_FAMILY="ipv4"
     fi
 fi
 
@@ -359,6 +375,28 @@ EOF
 # =====================================================
 # =============== 创建并启动服务 ====================
 # =====================================================
+
+if [ "$ENDPOINT_FAMILY" = "ipv4" ]; then
+    DEFAULT_ROUTE=$(ip -4 route show default | head -n 1)
+    DEFAULT_GW=$(echo "$DEFAULT_ROUTE" | awk '{print $3}')
+    DEFAULT_DEV=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
+    if [ -n "$DEFAULT_GW" ] && [ -n "$DEFAULT_DEV" ]; then
+        ip -4 route replace "$ENDPOINT_IP"/32 via "$DEFAULT_GW" dev "$DEFAULT_DEV" || true
+        yellow "✅ 已为 IPv4 端点添加直连路由：$ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV"
+    else
+        yellow "⚠ 未获取到 IPv4 默认网关，可能影响 IPv4 端点连通性"
+    fi
+elif [ "$ENDPOINT_FAMILY" = "ipv6" ]; then
+    DEFAULT_ROUTE=$(ip -6 route show default | head -n 1)
+    DEFAULT_GW=$(echo "$DEFAULT_ROUTE" | awk '{print $3}')
+    DEFAULT_DEV=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
+    if [ -n "$DEFAULT_GW" ] && [ -n "$DEFAULT_DEV" ]; then
+        ip -6 route replace "$ENDPOINT_IP"/128 via "$DEFAULT_GW" dev "$DEFAULT_DEV" || true
+        yellow "✅ 已为 IPv6 端点添加直连路由：$ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV"
+    else
+        yellow "⚠ 未获取到 IPv6 默认网关，可能影响 IPv6 端点连通性"
+    fi
+fi
 
 if [ "$SYSTEMD" = "1" ]; then
     yellow "🛠 创建 systemd 服务..."
