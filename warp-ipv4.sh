@@ -279,16 +279,11 @@ fi
 
 if [ "$IPv6" = "1" ]; then
     ENDPOINT="[2606:4700:d0::a29f:c005]:2408"
-    MODE_LINE=""
 else
     ENDPOINT="162.159.192.1:2408"
-    MODE_LINE="Mode = tun"
 fi
 
 yellow "使用端点：$ENDPOINT"
-if [ -n "$MODE_LINE" ]; then
-    yellow "纯 IPv4 环境，启用 tun 模式"
-fi
 # =====================================================
 # =============== 生成 warp.conf ======================
 # =====================================================
@@ -304,7 +299,6 @@ Type = free
 Name = WARP
 MTU = 1280
 Table = off
-${MODE_LINE}
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
