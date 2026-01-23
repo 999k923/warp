@@ -20,6 +20,10 @@ readp(){ read -p "$(yellow "$1")" $2;}
 #[[ -e /etc/hosts ]] && grep -qE '^ *172.65.251.78 gitlab.com' /etc/hosts || echo -e '\n172.65.251.78 gitlab.com' >> /etc/hosts
 if [[ -f /etc/redhat-release ]]; then
 release="Centos"
+elif grep -qi -E "alpine" /etc/issue 2>/dev/null; then
+release="Alpine"
+elif grep -qi -E "^ID=alpine" /etc/os-release 2>/dev/null; then
+release="Alpine"
 elif cat /etc/issue | grep -q -E -i "debian"; then
 release="Debian"
 elif cat /etc/issue | grep -q -E -i "ubuntu"; then
@@ -33,18 +37,58 @@ release="Ubuntu"
 elif cat /proc/version | grep -q -E -i "centos|red hat|redhat"; then
 release="Centos"
 else 
-red "不支持当前的系统，请选择使用Ubuntu,Debian,Centos系统。" && exit
+red "不支持当前的系统，请选择使用Ubuntu,Debian,Centos,Alpine系统。" && exit
 fi
 vsid=$(grep -i version_id /etc/os-release | cut -d \" -f2 | cut -d . -f1)
 op=$(cat /etc/redhat-release 2>/dev/null || cat /etc/os-release 2>/dev/null | grep -i pretty_name | cut -d \" -f2)
 version=$(uname -r | cut -d "-" -f1)
 main=$(uname -r | cut -d "." -f1)
 minor=$(uname -r | cut -d "." -f2)
+if command -v systemd-detect-virt >/dev/null 2>&1; then
 vi=$(systemd-detect-virt)
+else
+vi="unknown"
+fi
 case "$release" in
 "Centos") yumapt='yum -y';;
 "Ubuntu"|"Debian") yumapt="apt-get -y";;
+"Alpine") yumapt="apk add --no-cache";;
 esac
+if ! command -v systemctl >/dev/null 2>&1; then
+systemctl(){
+local action="$1"
+local unit="$2"
+if [[ -z "$action" ]]; then
+return 1
+fi
+if [[ "$unit" == "wg-quick@wgcf" ]]; then
+case "$action" in
+start) wg-quick up wgcf >/dev/null 2>&1;;
+stop) wg-quick down wgcf >/dev/null 2>&1;;
+restart) wg-quick down wgcf >/dev/null 2>&1 && wg-quick up wgcf >/dev/null 2>&1;;
+enable|disable) return 0;;
+is-active) wg show wgcf >/dev/null 2>&1 && echo active || echo inactive;;
+daemon-reload) return 0;;
+*) return 1;;
+esac
+"Alpine") yumapt="apk add --no-cache";;
+esac
+if ! command -v systemctl >/dev/null 2>&1; then
+systemctl(){
+local action="$1"
+local unit="$2"
+if [[ -z "$action" ]]; then
+return 1
+fi
+if [[ "$unit" == "wg-quick@wgcf" ]]; then
+case "$action" in
+start) wg-quick up wgcf >/dev/null 2>&1;;
+stop) wg-quick down wgcf >/dev/null 2>&1;;
+restart) wg-quick down wgcf >/dev/null 2>&1 && wg-quick up wgcf >/dev/null 2>&1;;
+enable|disable) return 0;;
+is-active) wg show wgcf >/dev/null 2>&1 && echo active || echo inactive;;
+daemon-reload) return 0;;
+*) return 1;;
 cpujg(){
 case $(uname -m) in
 aarch64) cpu=arm64;;
@@ -598,7 +642,7 @@ rm /tmp/crontab.tmp
 }
 
 ONEWARPGO(){
-if [[ $(echo "$op" | grep -i -E "arch|alpine") ]]; then
+if [[ $(echo "$op" | grep -i -E "arch") ]]; then
 red "脚本不支持当前的 $op 系统，请选择使用Ubuntu,Debian,Centos系统。" && exit
 fi
 yellow "\n 请稍等，当前为warp-go核心安装模式，检测对端IP与出站情况……"
@@ -854,6 +898,8 @@ echo "deb http://deb.debian.org/debian $(lsb_release -sc)-backports main" | tee 
 apt update -y;apt install iproute2 openresolv dnsutils iputils-ping -y
 elif [[ $release = Ubuntu ]]; then
 apt update -y;apt install iproute2 openresolv dnsutils iputils-ping -y
+elif [[ $release = Alpine ]]; then
+apk add --no-cache iproute2 iputils wireguard-tools openresolv ca-certificates
 fi
 wget -N https://gitlab.com/rwkgyg/CFwarp/-/raw/main/warp-go_1.0.8_linux_${cpu} -O /usr/local/bin/warp-go && chmod +x /usr/local/bin/warp-go
 yellow "正在申请WARP普通账户，请稍等！"
@@ -888,6 +934,7 @@ sed -i '0,/AllowedIPs/{/AllowedIPs/d;}' /usr/local/bin/warp.conf
 sed -i '/KeepAlive/a [Script]' /usr/local/bin/warp.conf
 mtuwarp
 sed -i "s/MTU.*/MTU = $MTU/g" /usr/local/bin/warp.conf
+if command -v systemctl >/dev/null 2>&1; then
 cat > /lib/systemd/system/warp-go.service << EOF
 [Unit]
 Description=warp-go service
@@ -902,6 +949,20 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
+else
+cat > /etc/init.d/warp-go << 'EOF'
+#!/sbin/openrc-run
+description="warp-go service"
+command="/usr/local/bin/warp-go"
+command_args="--config=/usr/local/bin/warp.conf"
+command_background="yes"
+pidfile="/run/warp-go.pid"
+depend() {
+    need net
+}
+EOF
+chmod +x /etc/init.d/warp-go
+fi
 ABC
 systemctl daemon-reload
 systemctl enable warp-go
@@ -1208,7 +1269,7 @@ fi
 }
 
 ONEWGCFWARP(){
-if [[ $(echo "$op" | grep -i -E "arch|alpine") ]]; then
+if [[ $(echo "$op" | grep -i -E "arch") ]]; then
 red "脚本不支持当前的 $op 系统，请选择使用Ubuntu,Debian,Centos系统。" && exit
 fi
 yellow "\n 请稍等，当前为wgcf核心安装模式，检测对端IP与出站情况……"
@@ -1762,6 +1823,8 @@ elif [ -x "$(command -v yum)" ]; then
 yum update && yum install epel-release -y && yum install curl wget -y
 elif [ -x "$(command -v dnf)" ]; then
 dnf update -y && dnf install curl wget -y
+elif [ -x "$(command -v apk)" ]; then
+apk add --no-cache curl wget ca-certificates
 fi
 if [ -x "$(command -v yum)" ] || [ -x "$(command -v dnf)" ]; then
 if ! command -v "cronie" &> /dev/null; then
@@ -1771,6 +1834,11 @@ elif [ -x "$(command -v dnf)" ]; then
 dnf install -y cronie
 fi
 fi
+fi
+if [ -x "$(command -v apk)" ]; then
+apk add --no-cache cronie
+rc-update add crond default >/dev/null 2>&1
+rc-service crond start >/dev/null 2>&1
 fi
 touch warp_update
 tun
@@ -1790,6 +1858,8 @@ elif [ -x "$(command -v yum)" ]; then
 yum install -y "$inspackage"
 elif [ -x "$(command -v dnf)" ]; then
 dnf install -y "$inspackage"
+elif [ -x "$(command -v apk)" ]; then
+apk add --no-cache "$inspackage"
 fi
 fi
 done
