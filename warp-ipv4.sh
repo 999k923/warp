@@ -71,24 +71,12 @@ is-active) wg show wgcf >/dev/null 2>&1 && echo active || echo inactive;;
 daemon-reload) return 0;;
 *) return 1;;
 esac
-"Alpine") yumapt="apk add --no-cache";;
-esac
-if ! command -v systemctl >/dev/null 2>&1; then
-systemctl(){
-local action="$1"
-local unit="$2"
-if [[ -z "$action" ]]; then
+else
 return 1
 fi
-if [[ "$unit" == "wg-quick@wgcf" ]]; then
-case "$action" in
-start) wg-quick up wgcf >/dev/null 2>&1;;
-stop) wg-quick down wgcf >/dev/null 2>&1;;
-restart) wg-quick down wgcf >/dev/null 2>&1 && wg-quick up wgcf >/dev/null 2>&1;;
-enable|disable) return 0;;
-is-active) wg show wgcf >/dev/null 2>&1 && echo active || echo inactive;;
-daemon-reload) return 0;;
-*) return 1;;
+}
+fi
+
 cpujg(){
 case $(uname -m) in
 aarch64) cpu=arm64;;
