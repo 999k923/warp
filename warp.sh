@@ -186,7 +186,8 @@ EOF
 
 write_systemd_unit(){
   if command -v systemctl >/dev/null 2>&1; then
-cat > /lib/systemd/system/warp-go.service << EOF
+mkdir -p /etc/systemd/system
+cat > /etc/systemd/system/warp-go.service << EOF
 [Unit]
 Description=warp-go service
 After=network.target
